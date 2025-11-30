@@ -20,6 +20,7 @@ import DeleteAccountScreen from './src/screens/DeleteAccountScreen';
 import DeleteAccountModal from './src/screens/DeleteAccountModal';
 import LogoutModal from './src/screens/LogoutModal';
 import ChatSettingsScreen from './src/screens/ChatSettingsScreen';
+import ChatScreen from './src/screens/ChatScreen'; 
 
 
 const Stack = createNativeStackNavigator();
@@ -119,6 +120,16 @@ function App(): React.JSX.Element {
           name="DeleteAccount"
           component={DeleteAccountScreen}
           options={{ headerShown: false }}
+        />
+        <Stack.Screen 
+          name="ChatSettings" 
+          component={ChatSettingsScreen} 
+          options={{ headerShown: false }} 
+        />
+        <Stack.Screen 
+          name="Chat" 
+          component={ChatScreen} 
+          options={{ headerShown: false }} 
         />
 
         <Stack.Screen

@@ -42,7 +42,7 @@ export default function SettingsScreen({ navigation }: any) {
         {/* ================= 이름 영역 ================= */}
         <View style={styles.nameRow}>
           <Text style={styles.nameLabel}>이름</Text>
-          <Pressable>
+          <Pressable onPress={() => navigation.navigate('NicknameEdit')}>
             <Text style={styles.nameAction}>변경하기</Text>
           </Pressable>
         </View>

@@ -105,8 +105,29 @@
 //           onPress: async () => {
 //             setIsLoading(true);
 //             try {
-//               // 1. 로컬 저장 (스크립트 화면용)
-//               await AsyncStorage.setItem('last_chat_history', JSON.stringify(messages));
+//         
+            //     // 1. AI에게 핵심 표현 추출 요청
+            //     // (메시지 포맷을 AI가 이해하기 쉽게 변환)
+            //   const historyPayload = messages.map(m => ({
+            //     role: m.role === 'user' ? 'user' : 'model',
+            //     content: m.content
+            //   }));
+
+            //   let reviewData = [];
+            //   try {
+            //     // 이 부분은 실제 백엔드 구현에 따라 달라질 수 있음
+            //     // 예시: AI가 텍스트로 준 JSON을 파싱
+            //     const res = await aiApi.extractKeyPhrases(historyPayload);
+                
+            //     // AI 응답 텍스트에서 JSON 부분만 추출하여 파싱 (간단 예시)
+            //     const jsonText = res.data.data.text.replace(/```json|```/g, '').trim();
+            //     reviewData = JSON.parse(jsonText);
+                
+            //   } catch (e) {
+            //     console.error("추출 실패, 기본값 사용", e);
+            //     // 실패 시 기본 메시지 혹은 빈 배열
+            //     reviewData = [{ en: "Review data not available", kr: "데이터 없음" }];
+            //   }
 
 //               // 2. 백엔드 저장 (세션 종료)
 //               if (sessionId && messages.length > 0) {

@@ -199,7 +199,7 @@ export default function ChatScreen() {
       { text: '취소', style: 'cancel' },
     ]);
   };
-
+  
   const handleFormSubmit = async () => {
     if (!input.trim() || isLoading) return;
 

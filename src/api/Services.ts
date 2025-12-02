@@ -31,9 +31,38 @@ export const aiApi = {
     }),
 
   /**
-   * 4. 대화 세션 초기화 (새로운 대화 시작 시 필수)
+   * 4. 대화 세션 초기화 
    */
   resetConversation: (userId: string) => 
     client.post('/api/conversation/reset', { userId }),
-};
+  /**
+   * 5. 대화 내역에서 회화 표현 추출
+   */ 
+  extractKeyPhrases: (history: any[]) => {
+    // 대화 내역을 문자열로 변환
+    const chatContext = history.map(m => `${m.role}: ${m.content}`).join('\n');
+    
+    // AI에게 요청할 프롬프트
+    const prompt = `
+      Analyze the following conversation and extract 5 useful English expressions for learning.
+      Provide the Korean translation for each.
+      
+      Conversation:
+      ${chatContext}
 
+      Format: JSON Array
+      [
+        {"en": "English phrase", "kr": "Korean meaning"},
+        ...
+      ]
+      Do not include any other text, only the JSON.
+    `;
+
+    // 기존 chat API 재활용 )
+    // 여기서는 text로 프롬프트를 보내고 응답을 파싱하는 방식 사용
+    return client.post('/api/ai/chat', { 
+      text: prompt,
+      userId: 'system_extractor' // 특수 목적용 ID
+    });
+  }
+};

@@ -9,27 +9,23 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { ChevronLeft } from 'lucide-react-native';
 
+// 데이터 타입 정의
 type CardItem = {
   en: string;
   kr: string;
 };
 
-const cards: CardItem[] = [
-  { en: 'Way to go.', kr: '잘했어' },
-  { en: 'I’m sold.', kr: '설득됐어' },
-  { en: 'Give her my best.', kr: '안부 전해줘' },
-  { en: 'Good for you.', kr: '잘됐다/좋겠다' },
-  { en: 'Time flies', kr: '시간 빠르다' },
-  { en: 'It’s up to you.', kr: '너가 결정해' },
-  { en: 'I mean it.', kr: '진심이야' },
-];
-
 export default function ReviewScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>(); // 파라미터를 받기 위해 useRoute 사용
   const insets = useSafeAreaInsets();
+
+  // ✅ ChatScreen에서 넘겨준 reviewCards 데이터를 받음
+  // 데이터가 없을 경우(그냥 들어왔을 때 등)를 대비해 빈 배열([])을 기본값으로 설정
+  const reviewCards: CardItem[] = route.params?.reviewCards || [];
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
@@ -55,15 +51,25 @@ export default function ReviewScreen() {
           contentContainerStyle={styles.cardList}
           showsVerticalScrollIndicator={false}
         >
-          {cards.map((item, index) => (
-            <View key={index} style={styles.card}>
-              <View style={styles.cardBg} />
-              <View style={styles.cardContentRow}>
-                <Text style={styles.cardTextEn}>{item.en}</Text>
-                <Text style={styles.cardTextKr}>{item.kr}</Text>
+          {reviewCards.length > 0 ? (
+            // 데이터가 있을 때 출력
+            reviewCards.map((item, index) => (
+              <View key={index} style={styles.card}>
+                <View style={styles.cardBg} />
+                <View style={styles.cardContentRow}>
+                  <Text style={styles.cardTextEn}>{item.en}</Text>
+                  <Text style={styles.cardTextKr}>{item.kr}</Text>
+                </View>
               </View>
+            ))
+          ) : (
+            // 데이터가 없을 때 표시할 화면 (예외 처리)
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>
+                추출된 표현이 없거나 대화 내역이 없습니다.
+              </Text>
             </View>
-          ))}
+          )}
         </ScrollView>
 
         {/* 하단 버튼 두 개 */}
@@ -131,8 +137,9 @@ const styles = StyleSheet.create({
   },
   card: {
     width: '100%',
-    height: 61,
+    minHeight: 61, // 내용이 길어질 수 있으므로 minHeight로 변경 권장
     justifyContent: 'center',
+    marginVertical: 4, // 카드 간 간격 미세 조정
   },
   cardBg: {
     ...StyleSheet.absoluteFillObject,
@@ -144,16 +151,32 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
+    paddingVertical: 12, // 텍스트 상하 여백 확보
   },
   cardTextEn: {
-    fontSize: 17,
-    fontWeight: '400',
-    color: 'black',
+    fontSize: 16, // 긴 문장 고려하여 약간 조절
+    fontWeight: '500', // 가독성을 위해 굵기 조절
+    color: '#000',
+    flex: 1, // 텍스트가 길 경우 줄바꿈 되도록
+    marginRight: 10,
   },
   cardTextKr: {
-    fontSize: 17,
+    fontSize: 15,
     fontWeight: '400',
-    color: 'black',
+    color: '#4B5563', // 약간 연한 색으로 구분
+    maxWidth: '40%', // 한국어 뜻이 너무 길지 않게 제한
+    textAlign: 'right',
+  },
+
+  /* 데이터 없음 예외 처리 스타일 */
+  emptyContainer: {
+    marginTop: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#6b7280',
   },
 
   /* 하단 버튼 영역 */

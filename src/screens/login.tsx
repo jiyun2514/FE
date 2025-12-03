@@ -1,6 +1,6 @@
-// src/screens/LoginScreen.tsx
+// src/screens/login.tsx (or LoginScreen.tsx)
 
-import React, { useState } from 'react';
+import React, { useState, useContext } from 'react';
 import {
   View,
   Text,
@@ -11,80 +11,89 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import PandaIcon from '../components/PandaIcon';
+import { AuthContext } from '../../App';
 
-type Props = {
-  navigation: any;
-};
+export default function LoginScreen() {
+  const navigation = useNavigation<any>();
+  const { login } = useContext(AuthContext);
 
-export default function LoginScreen({ navigation }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  const handleGoogleLogin = () => {
-    // TODO: Implement Google OAuth
-    console.log('[RN] Google login initiated');
-    navigation.navigate('Home'); // 웹의 router.push('/home')
+  const handleAuth0Login = async () => {
+    try {
+      await login();                 // 🔐 calls authorize(...) in App.tsx
+      navigation.reset({             // go to Home and clear back stack
+        index: 0,
+        routes: [{ name: 'Home' }],
+      });
+    } catch (e) {
+      console.error('Login failed:', e);
+    }
   };
- 
-  const handleSignup = () => {
-  console.log('[RN] Signup button clicked');
-  navigation.navigate('Signup');
+
+  const goSignup = () => {
+    navigation.navigate('Signup');
   };
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
-        style={styles.safeArea}
+        style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.container}>
-          <View style={styles.card}>
-            {/* Logo + Title */}
-            <View style={styles.logoSection}>
-              <View style={styles.logoRow}>
-                <Text style={styles.logoText}>LING</Text>
-                <PandaIcon size="small" />
-                <Text style={styles.logoText}>MATE</Text>
-              </View>
-              <Text style={styles.subtitle}>AI와 함께하는 외국어 회화</Text>
-            </View>
-
-            {/* Input Fields */}
-            <View style={styles.inputs}>
-              <TextInput
-                value={email}
-                onChangeText={setEmail}
-                placeholder="이메일"
-                placeholderTextColor="#9ca3af"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                style={styles.input}
-              />
-              <TextInput
-                value={password}
-                onChangeText={setPassword}
-                placeholder="비밀번호"
-                placeholderTextColor="#9ca3af"
-                secureTextEntry
-                style={styles.input}
-              />
-            </View>
-
-            {/* Login Button */}
-            <Pressable style={styles.loginButton} onPress={handleGoogleLogin}>
-              <Text style={styles.loginButtonText}>로그인</Text>
-            </Pressable>
-
-            {/* Signup */}
-            <View style={styles.signupSection}>
-              <Text style={styles.signupText}>계정이 없으신가요?</Text>
-
-              <Pressable style={styles.signupButton} onPress={handleSignup}>
-                <Text style={styles.signupButtonText}>회원가입</Text>
-              </Pressable>
-            </View>
+          {/* Logo */}
+          <View style={styles.logoRow}>
+            <Text style={styles.logoText}>LING</Text>
+            <PandaIcon size="small" />
+            <Text style={styles.logoText}>MATE</Text>
           </View>
+
+          {/* Title */}
+          <Text style={styles.title}>Welcome back 👋</Text>
+          <Text style={styles.subtitle}>
+            Sign in to continue practicing English.
+          </Text>
+
+          {/* Email */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.inputLabel}>Email</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="you@example.com"
+              placeholderTextColor="#9ca3af"
+              autoCapitalize="none"
+              keyboardType="email-address"
+              value={email}
+              onChangeText={setEmail}
+            />
+          </View>
+
+          {/* Password */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.inputLabel}>Password</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="••••••••"
+              placeholderTextColor="#9ca3af"
+              secureTextEntry
+              value={password}
+              onChangeText={setPassword}
+            />
+          </View>
+
+          {/* Login button */}
+          <Pressable style={styles.loginButton} onPress={handleAuth0Login}>
+            <Text style={styles.loginButtonText}>로그인 (Auth0)</Text>
+          </Pressable>
+
+          {/* Signup */}
+          <Pressable onPress={goSignup} style={styles.signupButton}>
+            <Text style={styles.signupButtonText}>회원가입 하기</Text>
+          </Pressable>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -100,79 +109,74 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 24,
     justifyContent: 'center',
-    alignItems: 'center',
-  },
-  card: {
-    width: '100%',
-    maxWidth: 360,
-    backgroundColor: '#d5d8e0',
-    borderRadius: 24,
-    padding: 24,
-    rowGap: 16,
-  },
-  logoSection: {
-    alignItems: 'center',
-    rowGap: 8,
-    marginBottom: 8,
   },
   logoRow: {
     flexDirection: 'row',
+    justifyContent: 'center',
     alignItems: 'center',
-    columnGap: 4,
+    marginBottom: 24,
   },
   logoText: {
-    fontSize: 22,
-    fontWeight: 'bold',
+    fontSize: 24,
+    fontWeight: '800',
     color: '#2c303c',
+    letterSpacing: 1,
+    marginHorizontal: 4,
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+    textAlign: 'center',
   },
   subtitle: {
-    fontSize: 13,
+    fontSize: 14,
     color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 24,
   },
-  inputs: {
-    rowGap: 8,
-    marginTop: 4,
+  inputGroup: {
+    marginBottom: 16,
+  },
+  inputLabel: {
+    fontSize: 14,
+    color: '#4b5563',
+    marginBottom: 6,
   },
   input: {
-    height: 48,
-    borderRadius: 12,
+    height: 44,
+    borderRadius: 10,
+    paddingHorizontal: 12,
     backgroundColor: '#ffffff',
-    paddingHorizontal: 14,
-    fontSize: 14,
-    color: '#2c303c',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    color: '#111827',
   },
   loginButton: {
-    marginTop: 8,
+    marginTop: 12,
     height: 48,
     borderRadius: 12,
-    backgroundColor: '#2c303c',
+    backgroundColor: '#111827',
     alignItems: 'center',
     justifyContent: 'center',
   },
   loginButtonText: {
     color: '#ffffff',
-    fontWeight: '500',
     fontSize: 15,
-  },
-  signupSection: {
-    marginTop: 8,
-    alignItems: 'center',
-  },
-  signupText: {
-    fontSize: 13,
-    color: '#6b7280',
-    marginBottom: 6,
+    fontWeight: '600',
   },
   signupButton: {
-    width: '100%',
+    marginTop: 16,
     height: 48,
     borderRadius: 12,
-    backgroundColor: '#3d424f',
+    borderWidth: 1,
+    borderColor: '#3d424f',
     alignItems: 'center',
     justifyContent: 'center',
   },
   signupButtonText: {
-    color: '#ffffff',
+    color: '#3d424f',
     fontWeight: '500',
     fontSize: 15,
   },

@@ -1,32 +1,33 @@
 // src/api/client.ts
 
 import axios from 'axios';
-import { Platform } from 'react-native';
+import { AuthContext } from '../../App';
+import { useContext } from 'react';
 
+// 🔥 Your deployed backend (Elastic Beanstalk)
+const BASE_URL = "http://lingomate-eb.ap-northeast-2.elasticbeanstalk.com";
 
-const PORT = '8000'; // Python(FastAPI) 서버 포트 (필요시 변경)
-
-const BASE_URL = Platform.select({
-  android: `http://10.0.2.2:${PORT}`, 
-  ios: `http://localhost:${PORT}`,
-});
-
+// Create axios instance
 const client = axios.create({
   baseURL: BASE_URL,
   headers: {
-    'Content-Type': 'application/json',
+    "Content-Type": "application/json",
   },
 });
 
-// 요청 로그 확인용 (디버깅)
-client.interceptors.request.use(request => {
-  console.log('Starting Request', JSON.stringify(request, null, 2));
-  return request;
-});
+// ===== 🔥 AUTH INTERCEPTOR (Adds Bearer token automatically) =====
+export const useAuthorizedClient = () => {
+  const { accessToken } = useContext(AuthContext);
 
-client.interceptors.response.use(response => {
-  console.log('Response:', JSON.stringify(response.data, null, 2));
-  return response;
-});
+  const authorizedClient = axios.create({
+    baseURL: BASE_URL,
+    headers: {
+      "Content-Type": "application/json",
+      ...(accessToken && { Authorization: `Bearer ${accessToken}` }),
+    },
+  });
+
+  return authorizedClient;
+};
 
 export default client;

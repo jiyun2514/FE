@@ -3,13 +3,19 @@
 import axios from 'axios';
 import { Platform } from 'react-native';
 
+const PORT = '8080'; // 배포 서버 포트
 
-const PORT = '8000'; // Python(FastAPI) 서버 포트 (필요시 변경)
+// ✅ 배포된 백엔드 서버 URL 설정
+const BASE_URL = `http://lingomate-eb.ap-northeast-2.elasticbeanstalk.com:${PORT}`;
 
+// 로컬 개발 시 주석 해제하여 사용
+/*
+const LOCAL_PORT = '8000';
 const BASE_URL = Platform.select({
-  android: `http://10.0.2.2:${PORT}`,
-  ios: `http://localhost:${PORT}`,
+  android: `http://10.0.2.2:${LOCAL_PORT}`, 
+  ios: `http://localhost:${LOCAL_PORT}`,
 });
+*/
 
 const client = axios.create({
   baseURL: BASE_URL,

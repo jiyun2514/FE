@@ -20,13 +20,13 @@
             android:windowSoftInputMode="adjustResize"
             android:exported="true">
 
-            <!-- 앱 실행용 intent-filter -->
+            <!-- App launcher -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Auth0 콜백용: com.lingomateapp://callback -->
+            <!-- 🔐 Auth0 callback: com.lingomateapp.auth0://callback -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 
@@ -36,7 +36,7 @@
                 <data
                     android:scheme="com.lingomateapp.auth0"
                     android:host="dev-rc5gsyjk5pfptk72.us.auth0.com"
-                    android:path="/android/com.lingomateapp/callback" />
+                    android:pathPrefix="/android/com.lingomateapp/callback" />
             </intent-filter>
 
         </activity>

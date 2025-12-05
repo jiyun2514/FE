@@ -16,11 +16,12 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import PandaIcon from '../components/PandaIcon';
 import { ChevronLeft } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { auth0 } from '../api/auth';
+import { auth0, REDIRECT_URI } from '../api/auth';
 
 type Props = {
   navigation: any;
 };
+
 
 export default function SignupScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
@@ -51,15 +52,19 @@ export default function SignupScreen({ navigation }: Props) {
     setLoading(true);
 
     try {
+
+      console.log("SIGNUP redirectUrl =", REDIRECT_URI);
       // 🔐 Auth0 Universal Login을 "회원가입 모드"로 오픈
       const credentials = await auth0.webAuth.authorize({
         scope: 'openid profile email',
+        redirectUrl: REDIRECT_URI,
         // 이메일 입력값을 Auth0 폼에 미리 넣어주고 싶으면:
         additionalParameters: {
           screen_hint: 'signup', // 👉 회원가입 화면으로 유도
           login_hint: email.trim(),
         },
       });
+      
 
       console.log('[Signup] Auth0 회원가입 + 로그인 성공:', credentials);
 

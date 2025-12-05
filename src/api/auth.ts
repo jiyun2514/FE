@@ -3,14 +3,14 @@
 import client from './Client';
 import Auth0 from 'react-native-auth0';
 
-// Auth0 인스턴스 생성 (프로젝트 전역에서 사용)
+
+// 🔥 Auth0 인스턴스 생성 (프로젝트 전역에서 사용)
 export const auth0 = new Auth0({
   domain: 'dev-rc5gsyjk5pfptk72.us.auth0.com',
-  clientId: 'k1naLtV7ldGAv6ufgUsNe6XlrOQynDpt',
+  clientId: 'k1naLtV7ldGAv6ufgUsNe6XlrOQynDpt',   // 반드시 실제 Client ID로 변경해야 함'
 });
 
-// React Native에서 사용할 콜백 URI
-const REDIRECT_URI = 'com.lingomateapp.auth0://dev-rc5gsyjk5pfptk72.us.auth0.com/android/com.lingomateapp/callback';
+export const REDIRECT_URI = "com.lingomateapp.auth0://dev-rc5gsyjk5pfptk72.us.auth0.com/android/com.lingomateapp/callback";
 
 // 로그인 함수
 export async function login() {

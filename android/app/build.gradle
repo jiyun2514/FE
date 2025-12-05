@@ -86,14 +86,13 @@ android {
         versionCode 1
         versionName "1.0"
 
-
         manifestPlaceholders = [
-            appAuthRedirectScheme: "com.lingomateapp",
-            usesCleartextTraffic: "false",
-            auth0Domain: "dev-rc5gsyjk5pfptk72.us.auth0.com",
-            auth0Scheme: "lingomate"
+            usesCleartextTraffic: "true",
+            auth0Domain : "dev-rc5gsyjk5pfptk72.us.auth0.com",
+            auth0Scheme : "com.lingomateapp.auth0"
         ]
     }
+
 
     signingConfigs {
         debug {

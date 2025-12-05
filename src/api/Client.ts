@@ -6,7 +6,7 @@ import { Platform } from 'react-native';
 const PORT = '8080'; // 배포 서버 포트
 
 // ✅ 배포된 백엔드 서버 URL 설정
-const BASE_URL = `http://lingomate-eb.ap-northeast-2.elasticbeanstalk.com:${PORT}`;
+const BASE_URL = `http://lingomate-eb.ap-northeast-2.elasticbeanstalk.com`;
 
 // 로컬 개발 시 주석 해제하여 사용
 /*

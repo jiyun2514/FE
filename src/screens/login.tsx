@@ -12,9 +12,8 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import PandaIcon from '../components/PandaIcon';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { auth0, authApi, REDIRECT_URI } from '../api/auth';
 
-// 🔥 auth.ts에서 login() / logout() 함수 가져오기
-import { login, authApi } from '../api/auth';
 
 type Props = {
   navigation: any;
@@ -29,8 +28,14 @@ export default function LoginScreen({ navigation }: Props) {
     setLoading(true);
 
     try {
-      // 🔑 Auth0 Universal Login 호출
-      const credentials = await login();
+      console.log("SIGNUP redirectUrl =", REDIRECT_URI);
+      // 1️⃣ Auth0 Universal Login 띄우기 (이메일/비번, 소셜 로그인 포함)
+      const credentials = await auth0.webAuth.authorize({
+        scope: 'openid profile email',
+        redirectUrl: REDIRECT_URI,
+        // 필요한 경우 additionalParameters에 값 추가 가능
+        // additionalParameters: { prompt: 'login' },
+      });
 
       console.log('Auth0 로그인 성공:', credentials);
 

@@ -8,25 +8,41 @@ import {
   SafeAreaView,
 } from 'react-native';
 import PandaIcon from '../components/PandaIcon';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type Props = {
   navigation: any;
 };
 
 export default function SplashScreen({ navigation }: Props) {
-  useEffect(() => {
-    // 2초 정도 보여준 뒤 로그인 화면으로 이동
-    const timer = setTimeout(() => {
-      navigation.replace('Login'); // 필요하면 'Home'으로 바꿔도 됨
-    }, 2000);
 
-    return () => clearTimeout(timer);
-  }, [navigation]);
+  useEffect(() => {
+    const bootstrap = async () => {
+      // Show splash animation a bit
+      await new Promise<void>((resolve) => {
+        setTimeout(() => resolve(), 1200);
+      });
+      
+
+      // Check if user is logged in (token exist?)
+      const token = await AsyncStorage.getItem("accessToken");
+
+      if (token) {
+        // User logged in → go Home
+        navigation.replace("Home");
+      } else {
+        // Not logged in → go Login
+        navigation.replace("Login");
+      }
+    };
+
+    bootstrap();
+  }, []);
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        {/* 중앙 팬다 + 로딩 점 3개 */}
+        
         <View style={styles.centerBlock}>
           <PandaIcon size="large" />
 
@@ -37,7 +53,6 @@ export default function SplashScreen({ navigation }: Props) {
           </View>
         </View>
 
-        {/* 하단 로고 + 언어 텍스트 */}
         <View style={styles.bottomBlock}>
           <View style={styles.logoRow}>
             <Text style={styles.logoText}>LING</Text>
@@ -46,6 +61,7 @@ export default function SplashScreen({ navigation }: Props) {
           </View>
           <Text style={styles.subtitle}>English • 한국어</Text>
         </View>
+
       </View>
     </SafeAreaView>
   );
@@ -54,7 +70,6 @@ export default function SplashScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    // 그라디언트 대신 연한 단색 배경 (나중에 linear-gradient로 바꿔도 됨)
     backgroundColor: '#f4f5f8',
   },
   container: {

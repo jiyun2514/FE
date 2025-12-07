@@ -3,19 +3,18 @@
 import axios from 'axios';
 import { Platform } from 'react-native';
 
-const PORT = '8080'; // 배포 서버 포트
-
-// ✅ 배포된 백엔드 서버 URL 설정
-const BASE_URL = `http://lingomate-eb.ap-northeast-2.elasticbeanstalk.com`;
-
-// 로컬 개발 시 주석 해제하여 사용
+// 로컬 백엔드 (server.js → 3000 포트)
 /*
-const LOCAL_PORT = '8000';
 const BASE_URL = Platform.select({
-  android: `http://10.0.2.2:${LOCAL_PORT}`, 
-  ios: `http://localhost:${LOCAL_PORT}`,
+  android: 'http://10.0.2.2:3000',
+  ios: 'http://localhost:3000',
 });
 */
+const BASE_URL = Platform.select({
+  android: 'http://10.0.2.2:3000',  // ← 로컬 백엔드
+  ios: 'http://localhost:3000',
+});
+
 
 const client = axios.create({
   baseURL: BASE_URL,
@@ -32,7 +31,6 @@ export const setAccessToken = (token: string | null) => {
   }
 };
 
-// 요청 로그 확인용 (디버깅)
 client.interceptors.request.use(request => {
   console.log('Starting Request', JSON.stringify(request, null, 2));
   return request;

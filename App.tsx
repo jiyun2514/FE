@@ -1,9 +1,11 @@
 // App.tsx
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import client from './src/api/Client';
+
 
 // Screens
 import HomeScreen from './src/screens/HomeScreen';
@@ -27,15 +29,25 @@ import ChatSettingsScreen from './src/screens/chatSettingScreen';
 import ChatScreen from './src/screens/ChatScreen'; 
 import ChatScript from './src/screens/ChatScript'; 
 import ChatHistoryScreen from './src/screens/ChatHistoryScreen';
+import WebSocketTestScreen from './src/screens/WebSocketTestScreen';
+
 
 
 const Stack = createNativeStackNavigator();
 
 function App(): React.JSX.Element {
+
+  useEffect(() => {
+    client.get('/')
+      .then(res => console.log('서버 응답:', res.data))
+      .catch(err => console.log('요청 실패:', err));
+  }, []);
+
+
   return (
     <SafeAreaProvider>
       <NavigationContainer>
-        <Stack.Navigator initialRouteName="Splash">
+        <Stack.Navigator initialRouteName="WsTest">
 
           <Stack.Screen
             name="Splash"
@@ -181,6 +193,13 @@ function App(): React.JSX.Element {
             options={{ headerShown: false }} 
           />
 
+          <Stack.Screen
+            name="WsTest"
+            component={WebSocketTestScreen}
+            options={{ headerShown: false }}
+          />
+
+
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>
@@ -188,3 +207,4 @@ function App(): React.JSX.Element {
 }
 
 export default App;
+

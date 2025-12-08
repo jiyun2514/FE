@@ -47,7 +47,7 @@ function App(): React.JSX.Element {
   return (
     <SafeAreaProvider>
       <NavigationContainer>
-        <Stack.Navigator initialRouteName="WsTest">
+        <Stack.Navigator initialRouteName="Splash">
 
           <Stack.Screen
             name="Splash"

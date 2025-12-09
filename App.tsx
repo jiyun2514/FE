@@ -1,9 +1,11 @@
 // App.tsx
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { setAccessToken } from './src/api/Client';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import client from './src/api/Client';
 
 
@@ -35,14 +37,25 @@ import WebSocketTestScreen from './src/screens/WebSocketTestScreen';
 
 const Stack = createNativeStackNavigator();
 
-function App(): React.JSX.Element {
+function App() {
+
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    client.get('/')
-      .then(res => console.log('서버 응답:', res.data))
-      .catch(err => console.log('요청 실패:', err));
+    const init = async () => {
+      const token = await AsyncStorage.getItem('accessToken');
+      if (token) {
+        setAccessToken(token);   // ← 요게 핵심!!!!! Axios에 Authorization 추가
+      }
+      setReady(true);
+    };
+
+    init();
   }, []);
 
+  if (!ready) {
+    return null;
+  }
 
   return (
     <SafeAreaProvider>

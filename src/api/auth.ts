@@ -34,4 +34,5 @@ export async function logout() {
 // 백엔드 API 요청
 export const authApi = {
   getMyAuthInfo: () => client.get('/api/auth/me'),
+  registerIfNeeded: () => client.post('/api/auth/register-if-needed')
 };

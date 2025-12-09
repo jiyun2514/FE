@@ -13,6 +13,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import PandaIcon from '../components/PandaIcon';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth0, authApi, REDIRECT_URI } from '../api/auth';
+import { setAccessToken } from '../api/Client';
 
 
 type Props = {
@@ -23,6 +24,41 @@ export default function LoginScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(false);
 
+  // handleLogin 내부만 교체
+const handleLogin = async () => {
+  if (loading) return;
+  setLoading(true);
+
+  try {
+    const credentials = await auth0.webAuth.authorize({
+      scope: 'openid profile email',
+      audience: 'https://api.lingomate.com',
+      redirectUrl: REDIRECT_URI,
+    });
+
+    await AsyncStorage.setItem('accessToken', credentials.accessToken);
+    setAccessToken(credentials.accessToken); 
+
+    if (credentials.idToken) {
+      await AsyncStorage.setItem('idToken', credentials.idToken);
+    }
+
+    try {
+      const me = await authApi.getMyAuthInfo();
+      console.log("유저 자동 생성 성공:", me.data);
+    } catch (err) {
+      console.log("/api/auth/me 실패:", err);
+    }
+
+    navigation.reset({ index: 0, routes: [{ name: 'Home' }] });
+  } catch (e) {
+    console.log('Auth0 로그인 실패:', e);
+    Alert.alert('로그인 실패', '다시 시도해주세요.');
+  } finally {
+    setLoading(false);
+  }
+};
+  /*
   const handleLogin = async () => {
     if (loading) return;
     setLoading(true);
@@ -32,6 +68,7 @@ export default function LoginScreen({ navigation }: Props) {
       // 1️⃣ Auth0 Universal Login 띄우기 (이메일/비번, 소셜 로그인 포함)
       const credentials = await auth0.webAuth.authorize({
         scope: 'openid profile email',
+        audience: 'https://api.lingomate.com',
         redirectUrl: REDIRECT_URI,
         // 필요한 경우 additionalParameters에 값 추가 가능
         // additionalParameters: { prompt: 'login' },
@@ -42,9 +79,17 @@ export default function LoginScreen({ navigation }: Props) {
       // 🔑 토큰 저장
       if (credentials.accessToken) {
         await AsyncStorage.setItem('accessToken', credentials.accessToken);
+        setAccessToken(credentials.accessToken);
       }
       if (credentials.idToken) {
         await AsyncStorage.setItem('idToken', credentials.idToken);
+      }
+
+      try {
+        const syncRes = await authApi.registerIfNeeded();
+        console.log('User synced:', syncRes.data);
+      } catch (err) {
+        console.log('register-if-needed 호출 실패:', err);
       }
 
       // 🔥 백엔드 /auth/me 호출 (선택)
@@ -67,7 +112,7 @@ export default function LoginScreen({ navigation }: Props) {
       setLoading(false);
     }
   };
-
+  */
   return (
     <SafeAreaView
       style={styles.safeArea}

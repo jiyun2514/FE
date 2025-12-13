@@ -1,3 +1,4 @@
+// src/api/Services.ts
 import client from './Client';
 import {
   ApiResponse,
@@ -58,7 +59,10 @@ export const conversationApi = {
    * POST /api/conversation/finish
    */
   finishSession: (data: FinishSessionRequest) =>
-    client.post<ApiResponse<FinishSessionResponse>>('/api/conversation/finish', data),
+    client.post<ApiResponse<FinishSessionResponse>>(
+      '/api/conversation/finish',
+      data,
+    ),
 
   /**
    * 대화 내역 조회
@@ -75,7 +79,9 @@ export const conversationApi = {
    * GET /api/conversation/:sessionId
    */
   getConversation: (sessionId: string) =>
-    client.get<ApiResponse<ConversationDetail>>(`/api/conversation/${sessionId}`),
+    client.get<ApiResponse<ConversationDetail>>(
+      `/api/conversation/${sessionId}`,
+    ),
 
   /**
    * 대화 삭제
@@ -103,21 +109,27 @@ export const subscriptionApi = {
    * GET /api/subscription/options
    */
   getOptions: () =>
-    client.get<ApiResponse<SubscriptionOptionsResponse>>('/api/subscription/options'),
+    client.get<ApiResponse<SubscriptionOptionsResponse>>(
+      '/api/subscription/options',
+    ),
 
   /**
    * 구독 시작/변경
    * POST /api/subscription/subscribe
    */
   subscribe: (plan: 'basic' | 'premium') =>
-    client.post<ApiResponse<SubscribeResponse>>('/api/subscription/subscribe', { plan }),
+    client.post<ApiResponse<SubscribeResponse>>('/api/subscription/subscribe', {
+      plan,
+    }),
 
   /**
    * 구독 취소
    * POST /api/subscription/cancel
    */
   cancel: () =>
-    client.post<ApiResponse<CancelSubscriptionResponse>>('/api/subscription/cancel'),
+    client.post<ApiResponse<CancelSubscriptionResponse>>(
+      '/api/subscription/cancel',
+    ),
 };
 
 // === 4. AI & 음성 (AI) ===
@@ -130,14 +142,14 @@ export const aiApi = {
     client.post<ApiResponse<AiChatResponse>>('/api/ai/chat', { text }),
 
   /**
-   * AI 피드백 - 의미 + 예문 제공
+   * AI 피드백
    * POST /api/ai/feedback
    */
   getFeedback: (text: string) =>
     client.post<ApiResponse<AiFeedbackResponse>>('/api/ai/feedback', { text }),
 
   /**
-   * TTS - 텍스트 -> 오디오 변환
+   * TTS
    * POST /api/ai/tts
    */
   tts: (text: string, voice?: string) =>
@@ -158,14 +170,18 @@ export const settingsApi = {
    * PUT /api/conversation/settings
    */
   updateSettings: (data: Partial<ConversationSettings>) =>
-    client.put<ApiResponse<ConversationSettings>>('/api/conversation/settings', data),
+    client.put<ApiResponse<ConversationSettings>>(
+      '/api/conversation/settings',
+      data,
+    ),
 };
 
 // === 6. 학습 통계 (Stats) ===
+// ⚠️ 기존에 '/stats'였는데, 다른 애들이 전부 /api/... 패턴이라면
+// 보통 백엔드도 /api/stats 일 확률이 높음.
 export const statsApi = {
-  getStats: () => client.get('/api/stats'),
+  getStats: () => client.get<ApiResponse<UserStats>>('/api/stats'),
 };
-
 
 // === 7. 스크립트(암기 문장) (Phrases) ===
 export const phrasesApi = {
@@ -183,16 +199,19 @@ export const notificationApi = {
    * GET /api/notifications/settings
    */
   getSettings: () =>
-    client.get<ApiResponse<NotificationSettings>>('/api/notifications/settings'),
+    client.get<ApiResponse<NotificationSettings>>(
+      '/api/notifications/settings',
+    ),
 
   /**
    * 알림 설정 변경
    * PUT /api/notifications/settings
    */
   updateSettings: (enabled: boolean) =>
-    client.put<ApiResponse<NotificationSettings>>('/api/notifications/settings', {
-      enabled,
-    }),
+    client.put<ApiResponse<NotificationSettings>>(
+      '/api/notifications/settings',
+      { enabled },
+    ),
 };
 
 // === 9. Home ===
@@ -201,6 +220,5 @@ export const homeApi = {
    * 홈 화면 상태
    * GET /api/home/status
    */
-  getStatus: () =>
-    client.get<ApiResponse<HomeStatusResponse>>('/api/home/status'),
+  getStatus: () => client.get<ApiResponse<HomeStatusResponse>>('/api/home/status'),
 };

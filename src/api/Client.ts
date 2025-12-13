@@ -1,36 +1,86 @@
 // src/api/Client.ts
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import axios from 'axios';
-import { Platform } from 'react-native';
+const BASE_URL = 'http://lingomate-backend.ap-northeast-2.elasticbeanstalk.com';
 
-// const BASE_URL = "http://lingomate-backend.ap-northeast-2.elasticbeanstalk.com";
-const BASE_URL = "http://10.0.2.2:8080"
+const ACCESS_TOKEN_KEY = 'accessToken';
 
 const client = axios.create({
   baseURL: BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 15000,
 });
 
-//client.defaults.headers.common['Authorization'] = "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InJGUVVqUW5SZS1ScTRIU1lkc3RFNSJ9.eyJpc3MiOiJodHRwczovL2Rldi1yYzVnc3lqazVwZnB0azcyLnVzLmF1dGgwLmNvbS8iLCJzdWIiOiJxVnFjcGdaM3RmY3p2S0c0ckhRbVJOTVhNYWRkODRkVUBjbGllbnRzIiwiYXVkIjoiaHR0cHM6Ly9hcGkubGluZ29tYXRlLmNvbSIsImlhdCI6MTc2NTI5NDA4NCwiZXhwIjoxNzY1MzgwNDg0LCJndHkiOiJjbGllbnQtY3JlZGVudGlhbHMiLCJhenAiOiJxVnFjcGdaM3RmY3p2S0c0ckhRbVJOTVhNYWRkODRkVSJ9.dJhUa0jFB-bi5DmYbNpIagnTFxyZZsQ78uLrYF2jqiY3-ka4lhcMtoRgVP0k_E__-61m8-7s6P7KkrytV5pE3mGFTj39p8fF1Xwq8o0MD2yEmOZVw8SrlY3i0rP_rL1XDq19DwKW1DSuqYvW9Vk_Oy2vqHKoe46HECRQ8MLE8sXeMbpIhO6w7nzODKlOIwINKyXAh9EvksMbLz5IQdxynruRv5BSMUj4ueSHtwehoj7SdKZGv9AT3WHuouANS8zhgwAbSkCKEAHsPwEjU4DwvUvhGnZZki3Dy45VVQ45mQXmrYADsV4bEQM5Z55u3HfxMm0Di5iW_sicgqLXtsM3dw";
+let inMemoryToken: string | null = null;
 
-export const setAccessToken = (token: string | null) => {
+export const setAccessToken = async (token: string | null) => {
+  inMemoryToken = token;
+
   if (token) {
-    client.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    await AsyncStorage.setItem(ACCESS_TOKEN_KEY, token);
   } else {
-    delete client.defaults.headers.common['Authorization'];
+    await AsyncStorage.removeItem(ACCESS_TOKEN_KEY);
   }
 };
 
-client.interceptors.request.use(request => {
-  console.log('Starting Request', JSON.stringify(request, null, 2));
-  return request;
-});
+export const hydrateAccessToken = async () => {
+  const token = await AsyncStorage.getItem(ACCESS_TOKEN_KEY);
+  inMemoryToken = token;
+  return token;
+};
 
-client.interceptors.response.use(response => {
-  console.log('Response:', JSON.stringify(response.data, null, 2));
-  return response;
-});
+// ✅ 요청 인터셉터: 매 요청마다 토큰 붙이기 (axios v1 타입: InternalAxiosRequestConfig)
+client.interceptors.request.use(
+  async (config: InternalAxiosRequestConfig) => {
+    // 1) 메모리 토큰 우선
+    let token = inMemoryToken;
+
+    // 2) 없으면 AsyncStorage에서 가져오기
+    if (!token) {
+      token = await AsyncStorage.getItem(ACCESS_TOKEN_KEY);
+      inMemoryToken = token;
+    }
+
+    // 3) 헤더 주입/제거
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    } else {
+      delete config.headers.Authorization;
+    }
+
+    // ✅ 디버그 로그
+    console.log(
+      '➡️ REQUEST',
+      config.method?.toUpperCase(),
+      `${config.baseURL}${config.url}`,
+    );
+    console.log('➡️ Authorization', config.headers.Authorization);
+
+    return config;
+  },
+  (error) => Promise.reject(error),
+);
+
+client.interceptors.response.use(
+  (response) => {
+    console.log('✅ RESPONSE', response.status, response.config?.url);
+    return response;
+  },
+  async (error: AxiosError<any>) => {
+    const status = error.response?.status;
+    const url = error.config?.url;
+
+    console.log('❌ API ERROR', status, url);
+
+    if (error.response?.data) {
+      console.log('❌ ERROR BODY', JSON.stringify(error.response.data, null, 2));
+    }
+
+    return Promise.reject(error);
+  },
+);
 
 export default client;

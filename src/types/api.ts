@@ -55,8 +55,13 @@ export interface ChatMessage {
 }
 
 export interface FinishSessionRequest {
-    sessionId: string;
-    script: ChatMessage[];
+  sessionId: string;
+  script: ChatMessage[];
+
+  // ✅ 추가: 서버가 분 계산할 때 쓰게 (없어도 기존 동작 유지)
+  durationMs?: number;
+  startedAt?: string;  // ISO string
+  finishedAt?: string; // ISO string
 }
 
 export interface FinishSessionResponse {

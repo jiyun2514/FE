@@ -1,6 +1,6 @@
 // src/screens/ProfileScreen.tsx
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { ChevronLeft } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import PandaIcon from '../components/PandaIcon';
-import client from '../api/Client';
+import { statsApi } from '../api/stats'; // ✅ client 사용 + /api/stats로 맞춘 statsApi
+import { useFocusEffect } from '@react-navigation/native';
 
 type Props = {
   navigation: any;
@@ -39,107 +40,91 @@ export default function ProfileScreen({ navigation }: Props) {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [loadingStats, setLoadingStats] = useState(true);
 
-  // ✅ 1. 프로필: 화면에 들어올 때마다 다시 로드
+  // ✅ 응답 구조가 달라도 최대한 Stats payload를 뽑아내기
+  const extractStatsPayload = (raw: any) => {
+    return raw?.data?.data ?? raw?.data ?? raw?.stats ?? raw;
+  };
+
+  // ✅ 프로필 로드
+  const loadProfile = useCallback(async () => {
+    try {
+      const storedName = await AsyncStorage.getItem('userName');
+      const storedAvatar = await AsyncStorage.getItem('userAvatarUri');
+
+      if (storedName) setUserName(storedName);
+      if (storedAvatar) setAvatarUri(storedAvatar);
+    } catch (e) {
+      console.log('[Profile] 프로필 불러오기 실패:', e);
+    }
+  }, []);
+
+  // ✅ 통계 로드 (핵심: /stats ❌, /api/stats ✅)
+  const fetchStats = useCallback(async () => {
+    setLoadingStats(true);
+
+    try {
+      const res = await statsApi.getStats();
+
+      console.log('[Profile] /api/stats 원본 응답:', JSON.stringify(res.data, null, 2));
+
+      const payload = extractStatsPayload(res.data);
+
+      console.log('[Profile] /api/stats payload:', JSON.stringify(payload, null, 2));
+
+      setStats({
+        totalSessions: payload?.totalSessions ?? 0,
+        totalMinutes: payload?.totalMinutes ?? 0,
+        avgScore: payload?.avgScore ?? 0,
+        bestScore: payload?.bestScore ?? 0,
+        streak: payload?.streak ?? 0,
+        newWordsLearned: payload?.newWordsLearned ?? 0,
+      });
+    } catch (e: any) {
+      console.log('[Profile] /api/stats 호출 실패:', e?.response?.status, e?.response?.data, e?.message);
+
+      setStats({
+        totalSessions: 0,
+        totalMinutes: 0,
+        avgScore: 0,
+        bestScore: 0,
+        streak: 0,
+        newWordsLearned: 0,
+      });
+    } finally {
+      setLoadingStats(false);
+    }
+  }, []);
+
+  // ✅ 처음 한 번
   useEffect(() => {
-    const loadProfile = async () => {
-      try {
-        const storedName = await AsyncStorage.getItem('userName');
-        const storedAvatar = await AsyncStorage.getItem('userAvatarUri');
-
-        if (storedName) setUserName(storedName);
-        if (storedAvatar) setAvatarUri(storedAvatar);
-      } catch (e) {
-        console.log('[Profile] 프로필 불러오기 실패:', e);
-      }
-    };
-
-    // 처음 마운트될 때 한 번
     loadProfile();
+  }, [loadProfile]);
 
-    // 🔥 화면이 다시 포커스될 때마다 또 한 번
-    const unsubscribe = navigation.addListener('focus', () => {
+  // ✅ 화면 들어올 때마다(포커스) 프로필+통계 둘 다 갱신
+  useFocusEffect(
+    useCallback(() => {
       loadProfile();
-    });
+      fetchStats();
+    }, [loadProfile, fetchStats]),
+  );
 
-    return unsubscribe;
-  }, [navigation]);
-
-  // ✅ 2. 통계: 마운트될 때 + 화면 포커스될 때마다 /api/stats 재요청
-  useEffect(() => {
-    let isMounted = true;
-
-    const fetchStats = async () => {
-      try {
-        const res = await client.get('/api/stats');
-        const data = res.data?.data || {};
-
-        if (!isMounted) return;
-
-        setStats({
-          totalSessions: data.totalSessions ?? 0,
-          totalMinutes: data.totalMinutes ?? 0,
-          avgScore: data.avgScore ?? 0,
-          bestScore: data.bestScore ?? 0,
-          streak: data.streak ?? 0,
-          newWordsLearned: data.newWordsLearned ?? 0,
-        });
-      } catch (e) {
-        console.log('[Profile] /api/stats 호출 실패:', e);
-
-        if (!isMounted) return;
-
-        setStats({
-          totalSessions: 0,
-          totalMinutes: 0,
-          avgScore: 0,
-          bestScore: 0,
-          streak: 0,
-          newWordsLearned: 0,
-        });
-      } finally {
-        if (isMounted) setLoadingStats(false);
-      }
-    };
-
-    // 처음 들어왔을 때 한 번 호출
-    fetchStats();
-
-    // 🔥 화면이 다시 포커스될 때마다 새로 호출
-    const unsubscribe = navigation.addListener('focus', () => {
-      if (!isMounted) return;
-      setLoadingStats(true); // 로딩 상태로 바꿔주고
-      fetchStats();          // 다시 /api/stats 요청
-    });
-
-    return () => {
-      isMounted = false;
-      unsubscribe();
-    };
-  }, [navigation]);
-
-  // ✅ 3. 포인트 계산: 통계 화면과 동일한 규칙 사용
+  // ✅ 포인트 계산: 3회마다 팬더 1개, 팬더 1개=10점
   const getTotalPoints = () => {
     if (!stats) return 0;
-    const pandaCount = Math.floor(stats.totalSessions / 3); // 예: 3회 = 판다 1개
-    return pandaCount * 10; // 판다 1개 = 10점
+    const pandaCount = Math.floor(stats.totalSessions / 3);
+    return pandaCount * 10;
   };
 
   const streakValue = stats ? stats.streak : 0;
   const pointsValue = stats ? getTotalPoints() : 0;
 
   return (
-    <SafeAreaView
-      style={styles.safeArea}
-      edges={['left', 'right', 'bottom']}
-    >
+    <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
       <View style={[styles.root, { paddingTop: insets.top }]}>
         {/* === 헤더 === */}
         <View style={styles.header}>
           <View style={styles.headerRow}>
-            <Pressable
-              style={styles.backButton}
-              onPress={() => navigation.goBack()}
-            >
+            <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
               <ChevronLeft color="#2c303c" size={24} />
             </Pressable>
 
@@ -195,32 +180,22 @@ export default function ProfileScreen({ navigation }: Props) {
           <View style={styles.statCard}>
             <Text style={styles.statIcon}>📆</Text>
             <Text style={styles.statLabel}>연속 학습일</Text>
-            <Text style={styles.statValue}>
-              {loadingStats ? '-' : streakValue}
-            </Text>
+            <Text style={styles.statValue}>{loadingStats ? '-' : streakValue}</Text>
           </View>
 
           <View style={styles.statCard}>
             <Text style={styles.statIcon}>⭐</Text>
             <Text style={styles.statLabel}>획득 포인트</Text>
-            <Text style={styles.statValue}>
-              {loadingStats ? '-' : pointsValue}
-            </Text>
+            <Text style={styles.statValue}>{loadingStats ? '-' : pointsValue}</Text>
           </View>
 
           {/* 메뉴들 */}
-          <Pressable
-            style={styles.menuItem}
-            onPress={() => navigation.navigate('StudyStats')}
-          >
+          <Pressable style={styles.menuItem} onPress={() => navigation.navigate('StudyStats')}>
             <Text style={styles.menuIcon}>📊</Text>
             <Text style={styles.menuLabel}>학습 통계</Text>
           </Pressable>
 
-          <Pressable
-            style={styles.menuItem}
-            onPress={() => navigation.navigate('ChatHistory')}
-          >
+          <Pressable style={styles.menuItem} onPress={() => navigation.navigate('ChatHistory')}>
             <Text style={styles.menuIcon}>💬</Text>
             <Text style={styles.menuLabel}>회화 스크립트</Text>
           </Pressable>

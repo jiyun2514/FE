@@ -17,7 +17,6 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { Send, Mic, Eye, Lightbulb, X } from 'lucide-react-native';
 import { aiApi, conversationApi } from '../api/Services';
-import { ChatMessage } from '../types/api';
 
 // 타입들
 type Message = {
@@ -32,26 +31,22 @@ type Message = {
 type RootStackParamList = {
   Home: undefined;
   Chat: { mode?: string };
-  Review: undefined;
+  Review: any; // 실제 params는 프로젝트에 맞춰도 됨
 };
 
 // 🔍 피드백 문자열에서 [Corrected Sentence]: 부분만 뽑아내기
 const extractCorrectedSentence = (feedback?: string | null): string | null => {
   if (!feedback) return null;
-
   const match = feedback.match(/\[Corrected Sentence\]:\s*(.+)/);
   if (!match) return null;
-
   return match[1].trim();
 };
 
 // 🔍 피드백 문자열에서 [Explanation]: 부분만 뽑아내기
 const extractExplanation = (feedback?: string | null): string | null => {
   if (!feedback) return null;
-
   const match = feedback.match(/\[Explanation\]:\s*([\s\S]+)/);
   if (!match) return null;
-
   return match[1].trim();
 };
 
@@ -73,45 +68,57 @@ export default function ChatScreen() {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
   const [sessionId, setSessionId] = useState<string | null>(null);
+
+  // ✅ 추가: 세션 시작 시각(로컬) + 서버 startTime 저장
+  const [sessionStartMs, setSessionStartMs] = useState<number | null>(null);
+  const [serverStartTime, setServerStartTime] = useState<string | null>(null);
+
   const flatListRef = useRef<FlatList>(null);
 
   // ⏱ 10분 제한 관련 상태
   const [timeUp, setTimeUp] = useState(false);
-  const [remainingMs, setRemainingMs] = useState(10 * 60 * 1000); // 10분(600000ms)
+  const [remainingMs, setRemainingMs] = useState(10 * 60 * 1000); // 10분
 
   // 1. 세션 시작
   useEffect(() => {
     const initSession = async () => {
       try {
         const res = await conversationApi.startSession();
+
         if (res.data.success && res.data.data) {
-          setSessionId(res.data.data.sessionId);
-          console.log('Session Started:', res.data.data.sessionId);
+          // 서버 응답이 string/number 섞여 와도 안전하게 문자열로 저장
+          const sid = String((res.data.data as any).sessionId);
+          setSessionId(sid);
+
+          const st = (res.data.data as any).startTime ? String((res.data.data as any).startTime) : null;
+          setServerStartTime(st);
+
+          // ✅ 로컬 시작 시각 저장
+          setSessionStartMs(Date.now());
+
+          console.log('Session Started:', sid, 'startTime:', st);
         }
       } catch (error) {
         console.error('Failed to start session:', error);
         Alert.alert('Error', '대화 세션을 시작할 수 없습니다.');
       }
     };
+
     initSession();
   }, []);
 
   // ⏱ 2. 1초마다 남은 시간 줄이기
   useEffect(() => {
-    if (timeUp) return; // 이미 끝났으면 타이머 돌리지 않음
+    if (timeUp) return;
 
     const interval = setInterval(() => {
       setRemainingMs(prev => {
         if (prev <= 1000) {
           clearInterval(interval);
-          if (!timeUp) {
-            setTimeUp(true);
-            Alert.alert(
-              '시간 종료',
-              '회화 시간이 종료되었습니다.',
-            );
-          }
+          setTimeUp(true);
+          Alert.alert('시간 종료', '회화 시간이 종료되었습니다.');
           return 0;
         }
         return prev - 1000;
@@ -132,35 +139,28 @@ export default function ChatScreen() {
   // 스크롤
   useEffect(() => {
     if (messages.length > 0) {
-      setTimeout(
-        () => flatListRef.current?.scrollToEnd({ animated: true }),
-        100,
-      );
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     }
   }, [messages]);
 
-  // [Updated] Feedback Request
+  // Feedback Request
   const handleRequestFeedback = async (messageId: string, content: string) => {
     setMessages(prev =>
-      prev.map(msg =>
-        msg.id === messageId ? { ...msg, isLoadingExtra: true } : msg,
-      ),
+      prev.map(msg => (msg.id === messageId ? { ...msg, isLoadingExtra: true } : msg)),
     );
+
     try {
       const res = await aiApi.getFeedback(content);
 
       if (res.data.success && res.data.data) {
         const data: any = res.data.data;
-
         let feedbackText = '';
 
         if (data.natural === false) {
-          // 교정 필요한 문장
           feedbackText =
             `[Corrected Sentence]: ${data.corrected_en}\n` +
             `[Explanation]: ${data.reason_ko}`;
         } else if (data.natural === true) {
-          // 이미 자연스러운 문장
           feedbackText = `${data.message}`;
         } else {
           throw new Error('Invalid feedback format');
@@ -168,9 +168,7 @@ export default function ChatScreen() {
 
         setMessages(prev =>
           prev.map(msg =>
-            msg.id === messageId
-              ? { ...msg, feedback: feedbackText, isLoadingExtra: false }
-              : msg,
+            msg.id === messageId ? { ...msg, feedback: feedbackText, isLoadingExtra: false } : msg,
           ),
         );
       } else {
@@ -178,30 +176,19 @@ export default function ChatScreen() {
       }
     } catch (err) {
       Alert.alert('Error', '피드백을 불러오지 못했습니다.');
-
       setMessages(prev =>
-        prev.map(msg =>
-          msg.id === messageId ? { ...msg, isLoadingExtra: false } : msg,
-        ),
+        prev.map(msg => (msg.id === messageId ? { ...msg, isLoadingExtra: false } : msg)),
       );
     }
   };
 
-  // 답변 추천 (API 미지원으로 임시 비활성화 or 추후 구현)
-  const handleRequestSuggestion = async (messageId: string, content: string) => {
+  // 답변 추천 (미구현)
+  const handleRequestSuggestion = async () => {
     Alert.alert('Info', '답변 추천 기능은 준비 중입니다.');
-    // API 명세에 답변 추천이 없으므로 일단 pass
   };
 
-  const handleCloseExtra = (
-    messageId: string,
-    type: 'feedback' | 'suggestion',
-  ) => {
-    setMessages(prev =>
-      prev.map(msg =>
-        msg.id === messageId ? { ...msg, [type]: null } : msg,
-      ),
-    );
+  const handleCloseExtra = (messageId: string, type: 'feedback' | 'suggestion') => {
+    setMessages(prev => prev.map(msg => (msg.id === messageId ? { ...msg, [type]: null } : msg)));
   };
 
   const handleModeChange = () => {
@@ -212,26 +199,22 @@ export default function ChatScreen() {
     ]);
   };
 
+  // ✅ 종료 시: durationMs / startedAt / finishedAt 같이 보냄
   const handleEndChat = async () => {
     console.log('🔥 handleEndChat clicked!');
 
-    // 1) 피드백이 달린 유저 메시지들 → ReviewScreen 카드용 데이터로 변환
     const reviewCards = messages
       .filter(m => m.role === 'user' && m.feedback)
       .map(m => {
         const corrected = extractCorrectedSentence(m.feedback);
         const explanation = extractExplanation(m.feedback);
-
         if (!corrected && !explanation) return null;
-
         return {
-          corrected: corrected || m.content, // 왼쪽 카드: 교정 문장
-          explanation: explanation || '', // 오른쪽 카드: 설명(한국어)
+          corrected: corrected || m.content,
+          explanation: explanation || '',
         };
       })
-      .filter(
-        (c): c is { corrected: string; explanation: string } => c !== null,
-      );
+      .filter((c): c is { corrected: string; explanation: string } => c !== null);
 
     console.log('📤 Generated reviewCards:', reviewCards);
 
@@ -240,19 +223,34 @@ export default function ChatScreen() {
       return;
     }
 
+    // ✅ duration 계산 (로컬 기준)
+    const finishedAtIso = new Date().toISOString();
+    const startedAtIso = serverStartTime ?? (sessionStartMs ? new Date(sessionStartMs).toISOString() : null);
+    const durationMs =
+      sessionStartMs != null ? Math.max(0, Date.now() - sessionStartMs) : undefined;
+
+    const payload = {
+      sessionId,
+      script: messages.map(m => ({
+        from: m.role === 'user' ? 'user' : 'ai',
+        text: m.content,
+      })),
+      // ✅ 추가 필드들
+      durationMs,
+      startedAt: startedAtIso ?? undefined,
+      finishedAt: finishedAtIso,
+    };
+
     console.log('📤 finishSession sending:', {
-      sessionId: sessionId,
-      scriptLength: messages.length,
+      sessionId,
+      durationMs,
+      startedAt: payload.startedAt,
+      finishedAt: payload.finishedAt,
+      scriptLength: payload.script.length,
     });
 
     try {
-      await conversationApi.finishSession({
-        sessionId: sessionId,
-        script: messages.map(m => ({
-          from: m.role === 'user' ? 'user' : 'ai',
-          text: m.content,
-        })),
-      });
+      await conversationApi.finishSession(payload as any);
 
       Alert.alert('저장 완료', '대화 내용이 저장되었습니다.', [
         {
@@ -272,7 +270,6 @@ export default function ChatScreen() {
   };
 
   const handleFormSubmit = async () => {
-    // ⏱ 시간 끝났으면 전송 막기
     if (timeUp) {
       Alert.alert(
         '시간 종료',
@@ -288,12 +285,12 @@ export default function ChatScreen() {
       role: 'user',
       content: input,
     };
+
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
 
     try {
-      // AI 채팅 요청
       const res = await aiApi.chat(input);
       if (res.data.success && res.data.data) {
         const assistantMessage: Message = {
@@ -316,18 +313,13 @@ export default function ChatScreen() {
 
     return (
       <View style={{ marginBottom: 16 }}>
-        <View
-          style={[
-            styles.messageRow,
-            isUser ? styles.userRow : styles.assistantRow,
-          ]}
-        >
+        <View style={[styles.messageRow, isUser ? styles.userRow : styles.assistantRow]}>
           {!isUser && (
             <TouchableOpacity
               onPress={() =>
                 item.suggestion
                   ? handleCloseExtra(item.id, 'suggestion')
-                  : handleRequestSuggestion(item.id, item.content)
+                  : handleRequestSuggestion()
               }
               style={styles.actionIconBtn}
               disabled={item.isLoadingExtra}
@@ -344,12 +336,7 @@ export default function ChatScreen() {
             </TouchableOpacity>
           )}
 
-          <View
-            style={[
-              styles.bubble,
-              isUser ? styles.userBubble : styles.assistantBubble,
-            ]}
-          >
+          <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
             <Text style={styles.messageText}>{item.content}</Text>
           </View>
 
@@ -375,12 +362,8 @@ export default function ChatScreen() {
         {isUser && item.feedback && (
           <View style={styles.feedbackContainer}>
             <View style={styles.feedbackHeader}>
-              <Text style={styles.feedbackTitle}>
-                🧐 피드백 (Grammar Check)
-              </Text>
-              <TouchableOpacity
-                onPress={() => handleCloseExtra(item.id, 'feedback')}
-              >
+              <Text style={styles.feedbackTitle}>🧐 피드백 (Grammar Check)</Text>
+              <TouchableOpacity onPress={() => handleCloseExtra(item.id, 'feedback')}>
                 <X size={16} color="#666" />
               </TouchableOpacity>
             </View>
@@ -391,12 +374,8 @@ export default function ChatScreen() {
         {!isUser && item.suggestion && (
           <View style={styles.suggestionContainer}>
             <View style={styles.feedbackHeader}>
-              <Text style={styles.suggestionTitle}>
-                💡 이렇게 말할 수 있어요
-              </Text>
-              <TouchableOpacity
-                onPress={() => handleCloseExtra(item.id, 'suggestion')}
-              >
+              <Text style={styles.suggestionTitle}>💡 이렇게 말할 수 있어요</Text>
+              <TouchableOpacity onPress={() => handleCloseExtra(item.id, 'suggestion')}>
                 <X size={16} color="#B45309" />
               </TouchableOpacity>
             </View>
@@ -408,27 +387,21 @@ export default function ChatScreen() {
   };
 
   return (
-    <SafeAreaView
-      style={styles.safeArea}
-      edges={['left', 'right', 'bottom']} // top은 insets.top으로 처리
-    >
+    <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
       <View style={styles.container}>
         {/* 헤더 */}
         <View style={[styles.header, { paddingTop: insets.top }]}>
-            {/* ⬅️ 왼쪽: 회화 종료 버튼 */}
-            <TouchableOpacity
-                onPress={handleEndChat}
-                style={styles.iconButton}
-            >
-                <Text style={styles.endChatText}>회화 종료</Text>
-                </TouchableOpacity>
-        <View style={styles.headerMiddle}>
-            <Text style={styles.headerTitle}>
-                {mode === 'casual' ? 'Casual Mode' : 'Formal Mode'}
-            </Text>
-        </View>
+          <TouchableOpacity onPress={handleEndChat} style={styles.iconButton}>
+            <Text style={styles.endChatText}>회화 종료</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity onPress={handleModeChange}>
+          <View style={styles.headerMiddle}>
+            <Text style={styles.headerTitle}>
+              {mode === 'casual' ? 'Casual Mode' : 'Formal Mode'}
+            </Text>
+          </View>
+
+          <TouchableOpacity onPress={handleModeChange}>
             <Text style={styles.modeButtonText}>모드 변경</Text>
           </TouchableOpacity>
         </View>
@@ -446,10 +419,7 @@ export default function ChatScreen() {
           data={messages}
           keyExtractor={item => item.id}
           renderItem={renderItem}
-          contentContainerStyle={[
-            styles.listContent,
-            { paddingTop: 8 + insets.top },
-          ]}
+          contentContainerStyle={[styles.listContent, { paddingTop: 8 + insets.top }]}
           ListHeaderComponent={
             <View style={styles.mascotContainer}>
               <View style={styles.mascotCircle}>
@@ -485,7 +455,7 @@ export default function ChatScreen() {
                 multiline={false}
                 onSubmitEditing={handleFormSubmit}
                 returnKeyType="send"
-                editable={!timeUp} // ⏱ 시간 끝나면 입력 비활성화
+                editable={!timeUp}
               />
               <TouchableOpacity style={styles.micButton}>
                 <Mic color="#9ca3af" size={20} />
@@ -494,7 +464,7 @@ export default function ChatScreen() {
 
             <TouchableOpacity
               onPress={handleFormSubmit}
-              disabled={!input.trim() || isLoading || timeUp} // ⏱ 버튼도 비활성화
+              disabled={!input.trim() || isLoading || timeUp}
               style={[
                 styles.sendButton,
                 (!input.trim() || isLoading || timeUp) && styles.disabledButton,

@@ -31,7 +31,6 @@ import ChatSettingsScreen from './src/screens/chatSettingScreen';
 import ChatScreen from './src/screens/ChatScreen'; 
 import ChatScript from './src/screens/ChatScript'; 
 import ChatHistoryScreen from './src/screens/ChatHistoryScreen';
-import WebSocketTestScreen from './src/screens/WebSocketTestScreen';
 
 
 
@@ -205,13 +204,6 @@ function App() {
             component={ChatScript} 
             options={{ headerShown: false }} 
           />
-
-          <Stack.Screen
-            name="WsTest"
-            component={WebSocketTestScreen}
-            options={{ headerShown: false }}
-          />
-
 
         </Stack.Navigator>
       </NavigationContainer>

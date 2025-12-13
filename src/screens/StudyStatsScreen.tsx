@@ -1,6 +1,6 @@
 // src/screens/StudyStatsScreen.tsx
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import PandaIcon from '../components/PandaIcon';
-import { statsApi } from '../api/stats'; // ← 반드시 client 사용하는 statsApi
+import { statsApi } from '../api/stats'; // ✅ client 쓰는 statsApi여야 함
 import { useFocusEffect } from '@react-navigation/native';
 
 type Props = {
@@ -33,33 +33,54 @@ export default function StudyStatsScreen({ navigation }: Props) {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // 🔥 백엔드에서 학습 통계 가져오기 
+  // ✅ 응답 구조가 달라도 최대한 Stats payload를 뽑아내는 함수
+  const extractStatsPayload = (raw: any) => {
+    // 가능한 케이스들:
+    // 1) { success: true, data: { ...Stats } }
+    // 2) { data: { ...Stats } }
+    // 3) { stats: { ...Stats } }
+    // 4) { ...Stats } (루트가 바로 Stats)
+    // 5) { success: true, data: { data: { ...Stats } } } (2중 래핑)
+    return (
+      raw?.data?.data ??
+      raw?.data ??
+      raw?.stats ??
+      raw
+    );
+  };
+
   const fetchStats = useCallback(async () => {
     setLoading(true);
+
     try {
       console.log('[StudyStats] fetchStats 호출');
+
       const res = await statsApi.getStats();
-      console.log(
-        '[StudyStats] /api/stats 응답:',
-        JSON.stringify(res.data, null, 2),
-      );
 
-      const data = res.data?.data || {};
+      // ✅ 원본 응답
+      console.log('[StudyStats] /api/stats 원본 응답:', JSON.stringify(res.data, null, 2));
 
-      setStats({
-        totalSessions: data.totalSessions ?? 0,
-        totalMinutes: data.totalMinutes ?? 0,
-        avgScore: data.avgScore ?? 0,
-        bestScore: data.bestScore ?? 0,
-        streak: data.streak ?? 0,
-        newWordsLearned: data.newWordsLearned ?? 0,
-      });
+      // ✅ payload 추출
+      const payload = extractStatsPayload(res.data);
+
+      console.log('[StudyStats] /api/stats payload:', JSON.stringify(payload, null, 2));
+
+      // ✅ 숫자 필드 매핑 (없으면 0)
+      const next: StatsData = {
+        totalSessions: payload?.totalSessions ?? 0,
+        totalMinutes: payload?.totalMinutes ?? 0,
+        avgScore: payload?.avgScore ?? 0,
+        bestScore: payload?.bestScore ?? 0,
+        streak: payload?.streak ?? 0,
+        newWordsLearned: payload?.newWordsLearned ?? 0,
+      };
+
+      setStats(next);
     } catch (err: any) {
-      console.log(
-        '[StudyStats] /api/stats 호출 실패:',
-        err?.response?.status,
-        err?.response?.data,
-      );
+      console.log('[StudyStats] /api/stats 호출 실패');
+      console.log(' - status:', err?.response?.status);
+      console.log(' - data:', JSON.stringify(err?.response?.data, null, 2));
+      console.log(' - message:', err?.message);
 
       // 실패해도 화면은 유지되도록 기본값
       setStats({
@@ -75,12 +96,7 @@ export default function StudyStatsScreen({ navigation }: Props) {
     }
   }, []);
 
-  // 처음 들어올 때 1번 호출
-  useEffect(() => {
-    fetchStats();
-  }, [fetchStats]);
-
-  // 다시 이 화면으로 돌아올 때마다 새로 호출
+  // ✅ 이 화면으로 "올 때마다" 한 번만 호출 (useEffect 중복 제거)
   useFocusEffect(
     useCallback(() => {
       fetchStats();
@@ -118,10 +134,7 @@ export default function StudyStatsScreen({ navigation }: Props) {
   // 로딩 화면
   if (loading || !stats) {
     return (
-      <SafeAreaView
-        style={styles.safeArea}
-        edges={['left', 'right', 'bottom']}
-      >
+      <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
         <View
           style={[
             styles.root,
@@ -143,17 +156,11 @@ export default function StudyStatsScreen({ navigation }: Props) {
 
   // 실제 화면
   return (
-    <SafeAreaView
-      style={styles.safeArea}
-      edges={['left', 'right', 'bottom']}
-    >
+    <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
       <View style={[styles.root, { paddingTop: insets.top }]}>
         {/* ===== 헤더 ===== */}
         <View style={styles.header}>
-          <Pressable
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-          >
+          <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
             <Text style={styles.backIcon}>‹</Text>
           </Pressable>
 
@@ -181,9 +188,7 @@ export default function StudyStatsScreen({ navigation }: Props) {
             </View>
 
             <View style={styles.summaryCard}>
-              <Text style={styles.summaryValue}>
-                {formatScore(stats.avgScore)}
-              </Text>
+              <Text style={styles.summaryValue}>{formatScore(stats.avgScore)}</Text>
               <Text style={styles.summaryLabel}>평균 점수</Text>
             </View>
 
@@ -193,9 +198,7 @@ export default function StudyStatsScreen({ navigation }: Props) {
             </View>
 
             <View style={styles.summaryCard}>
-              <Text style={styles.summaryValue}>
-                {formatScore(stats.bestScore)}
-              </Text>
+              <Text style={styles.summaryValue}>{formatScore(stats.bestScore)}</Text>
               <Text style={styles.summaryLabel}>최고 점수</Text>
             </View>
 

@@ -2,7 +2,8 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const BASE_URL = 'http://lingomate-backend.ap-northeast-2.elasticbeanstalk.com';
+//const BASE_URL = 'http://lingomate-backend.ap-northeast-2.elasticbeanstalk.com';
+const BASE_URL = 'http://10.0.2.2:8080'
 
 const ACCESS_TOKEN_KEY = 'accessToken';
 

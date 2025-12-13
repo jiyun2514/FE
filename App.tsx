@@ -1,21 +1,20 @@
 // App.tsx
-
 import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { setAccessToken } from './src/api/Client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import client from './src/api/Client';
 
+import { setAccessToken } from './src/api/Client';
+import { authApi } from './src/api/auth'; // ✅ add this
 
 // Screens
 import HomeScreen from './src/screens/HomeScreen';
-import LoginScreen from './src/screens/login'; 
-import ProfileScreen from './src/screens/Profile'; 
-import SplashScreen from './src/screens/SplashScreen'; 
+import LoginScreen from './src/screens/login';
+import ProfileScreen from './src/screens/Profile';
+import SplashScreen from './src/screens/SplashScreen';
 import SignupScreen from './src/screens/SignupScreen';
-import SettingsScreen from './src/screens/SettingsScreen'; 
+import SettingsScreen from './src/screens/SettingsScreen';
 import StudyStatsScreen from './src/screens/StudyStatsScreen';
 import ChangePasswordScreen from './src/screens/ChangePasswordScreen';
 import SubscriptionScreen from './src/screens/SubscriptionScreen';
@@ -28,40 +27,52 @@ import DeleteAccountModal from './src/screens/DeleteAccountModal';
 import LogoutModal from './src/screens/LogoutModal';
 import ReviewScreen from './src/screens/ReviewScreen';
 import ChatSettingsScreen from './src/screens/chatSettingScreen';
-import ChatScreen from './src/screens/ChatScreen'; 
-import ChatScript from './src/screens/ChatScript'; 
+import ChatScreen from './src/screens/ChatScreen';
+import ChatScript from './src/screens/ChatScript';
 import ChatHistoryScreen from './src/screens/ChatHistoryScreen';
 import ReviewHistoryScreen from './src/screens/ReviewHistoryScreen';
-
-
 
 const Stack = createNativeStackNavigator();
 
 function App() {
-
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     const init = async () => {
-      const token = await AsyncStorage.getItem('accessToken');
-      if (token) {
-        setAccessToken(token);   // ← 요게 핵심!!!!! Axios에 Authorization 추가
+      try {
+        const token = await AsyncStorage.getItem('accessToken');
+
+        if (token) {
+          // ✅ 1) attach token to axios
+          await setAccessToken(token);
+
+          // ✅ 2) ensure this Auth0 user exists in DB
+          // (safe to call every app start)
+          try {
+            await authApi.registerIfNeeded();
+            console.log('✅ register-if-needed OK');
+          } catch (e: any) {
+            console.log('❌ register-if-needed failed (token may be invalid). Clearing token.');
+
+            // If token expired/invalid, remove it so Splash can route to Login
+            await setAccessToken(null);
+            await AsyncStorage.removeItem('accessToken');
+          }
+        }
+      } finally {
+        setReady(true);
       }
-      setReady(true);
     };
 
     init();
   }, []);
 
-  if (!ready) {
-    return null;
-  }
+  if (!ready) return null;
 
   return (
     <SafeAreaProvider>
       <NavigationContainer>
         <Stack.Navigator initialRouteName="Splash">
-
           <Stack.Screen
             name="Splash"
             component={SplashScreen}
@@ -71,7 +82,7 @@ function App() {
           <Stack.Screen
             name="Login"
             component={LoginScreen}
-            options={{ headerShown: false }}  
+            options={{ headerShown: false }}
           />
 
           <Stack.Screen
@@ -110,7 +121,6 @@ function App() {
             options={{ headerShown: false }}
           />
 
-
           <Stack.Screen
             name="StudyStats"
             component={StudyStatsScreen}
@@ -135,7 +145,7 @@ function App() {
             options={{ headerShown: false }}
           />
 
-          {/* ===== 모달 ===== */}
+          {/* ===== Modals ===== */}
           <Stack.Screen
             name="PremiumSubscribeModal"
             component={PremiumSubscribeModal}
@@ -188,30 +198,29 @@ function App() {
             }}
           />
 
-          <Stack.Screen 
-            name="ChatSettings" 
-            component={ChatSettingsScreen} 
-            options={{ headerShown: false }} 
-          />
-
-          <Stack.Screen 
-            name="Chat" 
-            component={ChatScreen} 
-            options={{ headerShown: false }} 
-          />
-
-          <Stack.Screen 
-            name="Script" 
-            component={ChatScript} 
-            options={{ headerShown: false }} 
-          />
-
-        <Stack.Screen 
-            name="ReviewHistory" 
-            component={ReviewHistoryScreen} 
+          <Stack.Screen
+            name="ChatSettings"
+            component={ChatSettingsScreen}
             options={{ headerShown: false }}
           />
 
+          <Stack.Screen
+            name="Chat"
+            component={ChatScreen}
+            options={{ headerShown: false }}
+          />
+
+          <Stack.Screen
+            name="Script"
+            component={ChatScript}
+            options={{ headerShown: false }}
+          />
+
+          <Stack.Screen
+            name="ReviewHistory"
+            component={ReviewHistoryScreen}
+            options={{ headerShown: false }}
+          />
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>
@@ -219,4 +228,3 @@ function App() {
 }
 
 export default App;
-

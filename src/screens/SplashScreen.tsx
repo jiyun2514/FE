@@ -1,51 +1,67 @@
 // src/screens/SplashScreen.tsx
-
 import React, { useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  SafeAreaView,
-} from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView } from 'react-native';
 import PandaIcon from '../components/PandaIcon';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { authApi } from '../api/auth';
+import { setAccessToken } from '../api/Client';
 
 type Props = {
   navigation: any;
 };
 
 export default function SplashScreen({ navigation }: Props) {
-
   useEffect(() => {
     const bootstrap = async () => {
-      // Show splash animation a bit
-      await new Promise<void>((resolve) => {
-        setTimeout(() => resolve(), 1200);
-      });
-      
+      // splash animation delay
+      await new Promise<void>((resolve) => setTimeout(resolve, 1200));
 
-      // Check if user is logged in (token exist?)
-      const token = await AsyncStorage.getItem("accessToken");
+      const token = await AsyncStorage.getItem('accessToken');
 
-      if (token) {
-        // User logged in → go Home
-        navigation.replace("Home");
-      } else {
-        // Not logged in → go Login
-        navigation.replace("Login");
+      if (!token) {
+        navigation.replace('Login');
+        return;
+      }
+
+      try {
+        // ✅ ensure axios has the token before any API calls
+        await setAccessToken(token);
+
+        // ✅ 1) try strict me
+        await authApi.getMyAuthInfo();
+
+        // if ok -> go home
+        navigation.replace('Home');
+      } catch (err: any) {
+        const status = err?.response?.status;
+
+        // ✅ If user missing in DB, register then go home
+        if (status === 404) {
+          try {
+            await authApi.registerIfNeeded(); // sends POST /auth/register-if-needed
+            navigation.replace('Home');
+            return;
+          } catch (e) {
+            // fall through to logout
+          }
+        }
+
+        // ✅ token invalid/expired or register failed -> clear and go Login
+        await setAccessToken(null);
+        await AsyncStorage.removeItem('accessToken');
+        navigation.replace('Login');
       }
     };
 
     bootstrap();
-  }, []);
+  }, [navigation]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        
         <View style={styles.centerBlock}>
           <PandaIcon size="large" />
-
           <View style={styles.dotsRow}>
             <View style={[styles.dot, styles.dotActive]} />
             <View style={[styles.dot, styles.dotMedium]} />
@@ -61,7 +77,6 @@ export default function SplashScreen({ navigation }: Props) {
           </View>
           <Text style={styles.subtitle}>English • 한국어</Text>
         </View>
-
       </View>
     </SafeAreaView>
   );

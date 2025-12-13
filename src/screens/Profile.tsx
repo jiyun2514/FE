@@ -195,6 +195,11 @@ export default function ProfileScreen({ navigation }: Props) {
             <Text style={styles.menuLabel}>학습 통계</Text>
           </Pressable>
 
+          <Pressable style={styles.menuItem} onPress={() => navigation.navigate('ReviewHistory')}>
+            <Text style={styles.menuIcon}>🗂️</Text>
+            <Text style={styles.menuLabel}>복습 카드</Text>
+          </Pressable>
+
           <Pressable style={styles.menuItem} onPress={() => navigation.navigate('ChatHistory')}>
             <Text style={styles.menuIcon}>💬</Text>
             <Text style={styles.menuLabel}>회화 스크립트</Text>

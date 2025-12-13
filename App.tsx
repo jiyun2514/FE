@@ -31,6 +31,7 @@ import ChatSettingsScreen from './src/screens/chatSettingScreen';
 import ChatScreen from './src/screens/ChatScreen'; 
 import ChatScript from './src/screens/ChatScript'; 
 import ChatHistoryScreen from './src/screens/ChatHistoryScreen';
+import ReviewHistoryScreen from './src/screens/ReviewHistoryScreen';
 
 
 
@@ -203,6 +204,12 @@ function App() {
             name="Script" 
             component={ChatScript} 
             options={{ headerShown: false }} 
+          />
+
+        <Stack.Screen 
+            name="ReviewHistory" 
+            component={ReviewHistoryScreen} 
+            options={{ headerShown: false }}
           />
 
         </Stack.Navigator>

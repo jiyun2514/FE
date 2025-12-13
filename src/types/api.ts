@@ -147,7 +147,7 @@ export interface ConversationSettings {
 // === 6. Stats ===
 export interface UserStats {
     totalSessions: number;
-    totalMinutes: number;
+    totalTimeMins: number;
     avgScore: number;
     bestScore: number;
     streak: number;

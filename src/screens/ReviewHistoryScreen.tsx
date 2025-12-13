@@ -1,14 +1,15 @@
-// src/screens/ReviewScreen.tsx
-import React, { useEffect, useRef, useState, useMemo } from "react";
+// src/screens/ReviewHistoryScreen.tsx
+import React, { useCallback, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  Alert,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { useNavigation, useRoute } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { ChevronLeft } from "lucide-react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -42,72 +43,80 @@ const dedupeCardsPreserveOrder = (cards: CardItem[]) => {
   return out;
 };
 
-export default function ReviewScreen() {
+export default function ReviewHistoryScreen() {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
-  const route = useRoute<any>();
 
-  // ✅ history에서 다시 열었을 땐 auto-save 막기
-  const fromHistory: boolean = route.params?.fromHistory ?? false;
+  const [allCards, setAllCards] = useState<CardItem[]>([]);
+  const [rawSets, setRawSets] = useState<SavedReviewSet[]>([]);
 
-  const incomingCards: CardItem[] = route.params?.reviewCards || [];
-  const [reviewCards, setReviewCards] = useState<CardItem[]>(incomingCards);
+  const loadHistory = async () => {
+    try {
+      const raw = await AsyncStorage.getItem(STORAGE_KEY);
+      const sets: SavedReviewSet[] = raw ? JSON.parse(raw) : [];
 
-  // ✅ 한 번만 저장되게
-  const savedOnceRef = useRef(false);
+      const safeSets = Array.isArray(sets) ? sets : [];
+      setRawSets(safeSets);
 
-  useEffect(() => {
-    setReviewCards(incomingCards);
-  }, [incomingCards]);
+      // ✅ 오래된 → 최신 순으로 누적
+      const flattenedCards = safeSets
+        .slice()
+        .reverse()
+        .flatMap((set) => set.cards || []);
 
-  // ✅ 화면 표시용: 중복 제거된 카드
-  const visibleCards = useMemo(
-    () => dedupeCardsPreserveOrder(reviewCards),
-    [reviewCards]
+      // ✅ 화면은 중복 제거해서 1번만 보이게
+      const unique = dedupeCardsPreserveOrder(flattenedCards);
+      setAllCards(unique);
+    } catch (e) {
+      console.log("ReviewHistory load error", e);
+      setAllCards([]);
+      setRawSets([]);
+    }
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      loadHistory();
+    }, [])
   );
 
-  // ✅ ReviewScreen이 뜨면 자동 누적 저장 (단, history에서 열면 저장 X)
-  //    + 저장도 중복 제거해서 저장 (이미 같은 카드가 있으면 이번 저장에서 제외)
-  useEffect(() => {
-    if (fromHistory) return;
-    if (savedOnceRef.current) return;
-    if (!incomingCards || incomingCards.length === 0) return;
+  // ✅ index 삭제 대신: "해당 카드와 동일한 모든 카드" 삭제
+  const deleteCardByItem = (item: CardItem) => {
+    Alert.alert("삭제할까요?", "이 복습 카드를 삭제합니다. (중복된 동일 카드도 함께 삭제)", [
+      { text: "취소", style: "cancel" },
+      {
+        text: "삭제",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            const raw = await AsyncStorage.getItem(STORAGE_KEY);
+            const sets: SavedReviewSet[] = raw ? JSON.parse(raw) : [];
+            const safeSets = Array.isArray(sets) ? sets : [];
 
-    savedOnceRef.current = true;
+            const targetK = cardKey(item);
 
-    const autoAppendSave = async () => {
-      try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        const prev: SavedReviewSet[] = raw ? JSON.parse(raw) : [];
-        const safePrev = Array.isArray(prev) ? prev : [];
+            const nextSets: SavedReviewSet[] = [];
+            for (const set of safeSets) {
+              const nextCards = (set.cards || []).filter((c) => cardKey(c) !== targetK);
+              if (nextCards.length > 0) nextSets.push({ ...set, cards: nextCards });
+            }
 
-        // ✅ 기존 전체 카드 key들
-        const existingKeys = new Set<string>();
-        for (const set of safePrev) {
-          for (const c of set.cards || []) existingKeys.add(cardKey(c));
-        }
+            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(nextSets));
 
-        // ✅ 이번에 들어온 카드들 중 "기존에 없던 것만" 저장
-        const uniqueIncoming = dedupeCardsPreserveOrder(incomingCards);
-        const cardsToSave = uniqueIncoming.filter((c) => !existingKeys.has(cardKey(c)));
-
-        if (cardsToSave.length === 0) return;
-
-        const newSet: SavedReviewSet = {
-          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          createdAt: Date.now(),
-          cards: cardsToSave,
-        };
-
-        const next = [newSet, ...safePrev].slice(0, 100);
-        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      } catch (e) {
-        console.log("Review auto save error", e);
-      }
-    };
-
-    autoAppendSave();
-  }, [incomingCards, fromHistory]);
+            // ✅ 화면 갱신
+            const flattened = nextSets
+              .slice()
+              .reverse()
+              .flatMap((set) => set.cards || []);
+            setAllCards(dedupeCardsPreserveOrder(flattened));
+            setRawSets(nextSets);
+          } catch (e) {
+            console.log("선택 카드 삭제 실패", e);
+          }
+        },
+      },
+    ]);
+  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["left", "right", "bottom"]}>
@@ -121,17 +130,22 @@ export default function ReviewScreen() {
           <View style={{ width: 32 }} />
         </View>
 
-        {/* 카드 리스트 */}
+        {/* 카드 누적 리스트 (중복 제거된 카드만 표시) */}
         <ScrollView contentContainerStyle={styles.cardList}>
-          {visibleCards.length > 0 ? (
-            visibleCards.map((item, i) => (
-              <View key={cardKey(item) + "-" + i} style={styles.card}>
+          {allCards.length > 0 ? (
+            allCards.map((item, i) => (
+              <TouchableOpacity
+                key={cardKey(item) + "-" + i}
+                style={styles.card}
+                activeOpacity={0.9}
+                onLongPress={() => deleteCardByItem(item)}
+              >
                 <View style={styles.cardBg} />
                 <View style={styles.cardContentRow}>
                   <Text style={styles.cardTextEn}>{item.corrected}</Text>
                   <Text style={styles.cardTextKr}>{item.explanation}</Text>
                 </View>
-              </View>
+              </TouchableOpacity>
             ))
           ) : (
             <View style={styles.emptyContainer}>
@@ -175,6 +189,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     padding: 16,
   },
+
   cardTextEn: { fontSize: 16, fontWeight: "600", flex: 1, marginRight: 10 },
   cardTextKr: { fontSize: 14, color: "#4B5563", maxWidth: "45%", textAlign: "right" },
 

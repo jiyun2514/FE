@@ -12,6 +12,8 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -23,6 +25,7 @@ import {
 } from '@react-navigation/native';
 import { Send, Mic, Eye, Lightbulb, X } from 'lucide-react-native';
 import { aiApi, conversationApi } from '../api/Services';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // 타입들
 type Message = {
@@ -37,8 +40,35 @@ type Message = {
 type RootStackParamList = {
   Home: undefined;
   Chat: { mode?: string };
-  Review: any; // 실제 params는 프로젝트에 맞춰도 됨
+  Review: any;
 };
+
+// ===== 로컬 통계 키 =====
+const STATS_KEYS = {
+  totalMinutes: 'local_stats_totalMinutes',
+  streak: 'local_stats_streak',
+  lastStudyDate: 'local_stats_lastStudyDate', // "YYYY-MM-DD"
+  totalSentences: 'local_stats_totalSentences',
+  learnedSet: 'local_stats_learnedSentenceSet', // JSON string array
+};
+
+const ymdLocal = (date: Date) => {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const isYesterday = (last: string, today: string) => {
+  const [y, m, d] = last.split('-').map(Number);
+  const lastDate = new Date(y, m - 1, d);
+  const next = new Date(lastDate);
+  next.setDate(lastDate.getDate() + 1);
+  return ymdLocal(next) === today;
+};
+
+const normalizeSentence = (s: string) =>
+  s.trim().replace(/\s+/g, ' ').toLowerCase();
 
 // 🔍 피드백 문자열에서 [Corrected Sentence]: 부분만 뽑아내기
 const extractCorrectedSentence = (feedback?: string | null): string | null => {
@@ -80,7 +110,7 @@ export default function ChatScreen() {
 
   const [sessionId, setSessionId] = useState<string | null>(null);
 
-  // ✅ 추가: 세션 시작 시각(로컬) + 서버 startTime 저장
+  // ✅ 세션 시작 시각(로컬) + 서버 startTime 저장
   const [sessionStartMs, setSessionStartMs] = useState<number | null>(null);
   const [serverStartTime, setServerStartTime] = useState<string | null>(null);
 
@@ -91,20 +121,37 @@ export default function ChatScreen() {
   const [remainingMs, setRemainingMs] = useState(TIMER_MS);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ✅ ChatScreen "들어갈 때마다" 무조건 10:00부터 시작 + 나가면 타이머 정리
+  // ✅ 종료 중복 방지
+  const endedRef = useRef(false);
+
+  // ✅ 점수 모달
+  const [scoreModalVisible, setScoreModalVisible] = useState(false);
+  const [latestScore, setLatestScore] = useState<number>(0);
+  const [endWasAuto, setEndWasAuto] = useState(false);
+
+  // ✅ 모달 확인 후 이동할 데이터
+  const pendingNavRef = useRef<{ sessionId?: string; reviewCards: any[] } | null>(
+    null,
+  );
+
+  // ✅ ChatScreen "들어갈 때마다" 타이머/플래그 리셋
   useFocusEffect(
     useCallback(() => {
-      // 들어올 때 리셋
+      endedRef.current = false;
+
       setTimeUp(false);
       setRemainingMs(TIMER_MS);
 
-      // 혹시 남아있던 interval 있으면 먼저 정리
+      setScoreModalVisible(false);
+      setLatestScore(0);
+      setEndWasAuto(false);
+      pendingNavRef.current = null;
+
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
 
-      // 나갈 때 정리 (다른 화면에서 Alert 절대 안 뜨게)
       return () => {
         if (timerRef.current) {
           clearInterval(timerRef.current);
@@ -114,13 +161,14 @@ export default function ChatScreen() {
     }, []),
   );
 
-  // 1. 세션 시작 (컴포넌트 mount 1회)
+  // 1) 세션 시작 (mount 1회)
   useEffect(() => {
     const initSession = async () => {
       try {
         const res = await conversationApi.startSession();
 
-        if (res.data.success && res.data.data) {
+        // ✅ successResponse 구조라면 보통: { success: true, data: {...} }
+        if (res.data?.success && res.data?.data) {
           const sid = String((res.data.data as any).sessionId);
           setSessionId(sid);
 
@@ -129,10 +177,11 @@ export default function ChatScreen() {
             : null;
           setServerStartTime(st);
 
-          // ✅ 로컬 시작 시각 저장 (세션 단위)
           setSessionStartMs(Date.now());
 
           console.log('Session Started:', sid, 'startTime:', st);
+        } else {
+          console.log('startSession unexpected response:', res.data);
         }
       } catch (error) {
         console.error('Failed to start session:', error);
@@ -143,9 +192,208 @@ export default function ChatScreen() {
     initSession();
   }, []);
 
-  // ⏱ 2. 1초마다 남은 시간 줄이기
-  // ✅ ChatScreen에 "포커스일 때만" interval 작동
-  // ✅ Alert도 "포커스일 때만" 뜸
+  // 남은 시간 mm:ss 포맷
+  const formatTime = (ms: number) => {
+    const totalSeconds = Math.floor(ms / 1000);
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  // ✅ 점수 모달 열기
+  const openScoreModal = (opts: {
+    score: number;
+    isAuto: boolean;
+    nav: { sessionId?: string; reviewCards: any[] };
+  }) => {
+    setLatestScore(opts.score ?? 0);
+    setEndWasAuto(opts.isAuto);
+    pendingNavRef.current = opts.nav;
+    setScoreModalVisible(true);
+  };
+
+  // ✅ 모달 확인 누르면 Review로 이동
+  const handleScoreConfirm = () => {
+    const nav = pendingNavRef.current;
+    setScoreModalVisible(false);
+
+    if (!nav) {
+      navigation.goBack();
+      return;
+    }
+
+    navigation.navigate('Review', {
+      sessionId: nav.sessionId,
+      reviewCards: nav.reviewCards,
+    });
+  };
+
+  // ✅ 회화 종료(수동/자동)
+  const handleEndChat = async (opts?: { auto?: boolean }) => {
+    const isAuto = opts?.auto === true;
+
+    // ✅ 중복 종료 방지
+    if (endedRef.current) return;
+    endedRef.current = true;
+
+    console.log('🔥 handleEndChat', { isAuto });
+
+    // ✅ 타이머 중지
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    // ReviewCards 생성
+    const reviewCards = messages
+      .filter(m => m.role === 'user' && m.feedback)
+      .map(m => {
+        const corrected = extractCorrectedSentence(m.feedback);
+        const explanation = extractExplanation(m.feedback);
+        if (!corrected && !explanation) return null;
+        return {
+          corrected: corrected || m.content,
+          explanation: explanation || '',
+        };
+      })
+      .filter((c): c is { corrected: string; explanation: string } => c !== null);
+
+    // ✅ (프론트만) 로컬 통계 업데이트 (네 기존 코드 유지)
+    try {
+      const durationMsLocal =
+        sessionStartMs != null ? Math.max(0, Date.now() - sessionStartMs) : 0;
+      const addMinutes = Math.max(1, Math.ceil(durationMsLocal / 60000)); // 최소 1분
+
+      const prevMinutes = Number(
+        (await AsyncStorage.getItem(STATS_KEYS.totalMinutes)) ?? '0',
+      );
+      await AsyncStorage.setItem(
+        STATS_KEYS.totalMinutes,
+        String(prevMinutes + addMinutes),
+      );
+
+      const todayKey = ymdLocal(new Date());
+      const lastKey = await AsyncStorage.getItem(STATS_KEYS.lastStudyDate);
+      const prevStreak = Number(
+        (await AsyncStorage.getItem(STATS_KEYS.streak)) ?? '0',
+      );
+
+      let newStreak = prevStreak;
+      if (!lastKey) newStreak = 1;
+      else if (lastKey === todayKey) newStreak = prevStreak;
+      else if (isYesterday(lastKey, todayKey)) newStreak = prevStreak + 1;
+      else newStreak = 1;
+
+      await AsyncStorage.setItem(STATS_KEYS.streak, String(newStreak));
+      await AsyncStorage.setItem(STATS_KEYS.lastStudyDate, todayKey);
+
+      const rawSet = (await AsyncStorage.getItem(STATS_KEYS.learnedSet)) ?? '[]';
+      const arr: string[] = JSON.parse(rawSet);
+      const learned = new Set(arr);
+
+      const candidates = reviewCards.map(c => normalizeSentence(c.corrected));
+
+      let added = 0;
+      for (const s of candidates) {
+        if (!s) continue;
+        if (!learned.has(s)) {
+          learned.add(s);
+          added += 1;
+        }
+      }
+
+      if (added > 0) {
+        const prevSentences = Number(
+          (await AsyncStorage.getItem(STATS_KEYS.totalSentences)) ?? '0',
+        );
+        await AsyncStorage.setItem(
+          STATS_KEYS.totalSentences,
+          String(prevSentences + added),
+        );
+        await AsyncStorage.setItem(
+          STATS_KEYS.learnedSet,
+          JSON.stringify(Array.from(learned)),
+        );
+      }
+
+      console.log('✅ Local stats updated:', {
+        addMinutes,
+        streak: newStreak,
+        addedSentences: added,
+      });
+    } catch (e) {
+      console.log('❌ Local stats update failed:', e);
+    }
+
+    // sessionId 없으면 점수 없이 Review로 (원하면 여기서도 모달 띄워도 됨)
+    if (!sessionId) {
+      navigation.navigate('Review', { reviewCards });
+      return;
+    }
+
+    const finishedAtIso = new Date().toISOString();
+    const startedAtIso =
+      serverStartTime ??
+      (sessionStartMs ? new Date(sessionStartMs).toISOString() : null);
+    const durationMs =
+      sessionStartMs != null ? Math.max(0, Date.now() - sessionStartMs) : undefined;
+
+    const payload = {
+      sessionId,
+      script: messages.map(m => ({
+        from: m.role === 'user' ? 'user' : 'ai',
+        text: m.content,
+      })),
+      durationMs,
+      startedAt: startedAtIso ?? undefined,
+      finishedAt: finishedAtIso,
+    };
+
+    try {
+      console.log("🔥 conversationApi:", conversationApi);
+      console.log("🔥 finishSession URL (try1):", (conversationApi as any)?.defaults?.baseURL);
+      console.log("🔥 finishSession URL (try2):", (conversationApi as any)?.client?.defaults?.baseURL);
+
+  // 2) finishSession 호출
+      const res = await conversationApi.finishSession(payload as any);
+
+  // 3) raw 응답 확인
+      console.log('🔥 finishSession raw:', JSON.stringify(res.data, null, 2));
+
+      const resBody = res.data as any;
+
+  // 4) score 후보 여러 경로 커버
+      const data = resBody?.data ?? resBody;
+
+      const scoreCandidate =
+      data?.scoreSaved ??           // ✅ 너 백엔드가 주는 키
+      data?.score ??                // (혹시 다른 버전 대비)
+      resBody?.scoreSaved ??
+      resBody?.score ??
+      data?.conversation?.score ??
+      data?.result?.score;
+
+      const score = Number.isFinite(Number(scoreCandidate)) ? Number(scoreCandidate) : 0;
+
+      console.log("🔥 scoreCandidate:", scoreCandidate, "=> score:", score);
+
+      // 저장 실패해도 모달은 띄우고 Review로 가게(점수 0)
+      openScoreModal({
+        score,
+        isAuto,
+        nav: { sessionId, reviewCards },
+      });
+    } catch (e) {
+      console.error(e);
+      openScoreModal({
+        score: 0,
+        isAuto,
+        nav: { sessionId, reviewCards },
+      });
+    }
+  };
+
+  // ⏱ 2) 1초마다 남은 시간 줄이기 (포커스일 때만)
   useEffect(() => {
     if (!isFocused || timeUp) return;
 
@@ -165,9 +413,9 @@ export default function ChatScreen() {
 
           setTimeUp(true);
 
-          // ✅ 다른 화면에서 팝업 뜨는 것 방지: 포커스일 때만
+          // ✅ 시간 끝나면 자동 종료(저장+모달)
           if (isFocused) {
-            Alert.alert('시간 종료', '회화 시간이 종료되었습니다.');
+            handleEndChat({ auto: true });
           }
 
           return 0;
@@ -183,14 +431,6 @@ export default function ChatScreen() {
       }
     };
   }, [isFocused, timeUp]);
-
-  // 남은 시간 mm:ss 포맷
-  const formatTime = (ms: number) => {
-    const totalSeconds = Math.floor(ms / 1000);
-    const m = Math.floor(totalSeconds / 60);
-    const s = totalSeconds % 60;
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  };
 
   // 스크롤
   useEffect(() => {
@@ -257,86 +497,11 @@ export default function ChatScreen() {
     ]);
   };
 
-  // ✅ 회화 종료: ReviewCards 생성 + 세션 저장 + 다른 화면에서 타이머/Alert 방지 위해 interval stop
-  const handleEndChat = async () => {
-    console.log('🔥 handleEndChat clicked!');
-
-    // ✅ 다른 화면으로 가기 전에 타이머 중지 (포커스 바뀌기 전 race 방지)
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-
-    const reviewCards = messages
-      .filter(m => m.role === 'user' && m.feedback)
-      .map(m => {
-        const corrected = extractCorrectedSentence(m.feedback);
-        const explanation = extractExplanation(m.feedback);
-        if (!corrected && !explanation) return null;
-        return {
-          corrected: corrected || m.content,
-          explanation: explanation || '',
-        };
-      })
-      .filter((c): c is { corrected: string; explanation: string } => c !== null);
-
-    console.log('📤 Generated reviewCards:', reviewCards);
-
-    if (!sessionId) {
-      navigation.navigate('Review', { reviewCards });
-      return;
-    }
-
-    const finishedAtIso = new Date().toISOString();
-    const startedAtIso =
-      serverStartTime ?? (sessionStartMs ? new Date(sessionStartMs).toISOString() : null);
-    const durationMs =
-      sessionStartMs != null ? Math.max(0, Date.now() - sessionStartMs) : undefined;
-
-    const payload = {
-      sessionId,
-      script: messages.map(m => ({
-        from: m.role === 'user' ? 'user' : 'ai',
-        text: m.content,
-      })),
-      durationMs,
-      startedAt: startedAtIso ?? undefined,
-      finishedAt: finishedAtIso,
-    };
-
-    console.log('📤 finishSession sending:', {
-      sessionId,
-      durationMs,
-      startedAt: payload.startedAt,
-      finishedAt: payload.finishedAt,
-      scriptLength: payload.script.length,
-    });
-
-    try {
-      await conversationApi.finishSession(payload as any);
-
-      Alert.alert('저장 완료', '대화 내용이 저장되었습니다.', [
-        {
-          text: '확인',
-          onPress: () =>
-            navigation.navigate('Review', {
-              sessionId,
-              reviewCards,
-            }),
-        },
-      ]);
-    } catch (error) {
-      console.error('Failed to save session:', error);
-      Alert.alert('Error', '대화 내용을 저장하지 못했습니다.');
-      navigation.navigate('Review', { sessionId, reviewCards });
-    }
-  };
-
   const handleFormSubmit = async () => {
     if (timeUp) {
       Alert.alert(
         '시간 종료',
-        '10분이 지나서 더 이상 메시지를 보낼 수 없습니다.\n"회화 종료" 버튼으로 넘어가 주세요.',
+        '10분이 지나서 더 이상 메시지를 보낼 수 없습니다.\n자동으로 종료되었어요.',
       );
       return;
     }
@@ -398,7 +563,7 @@ export default function ChatScreen() {
           )}
 
           <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-            <Text style={[styles.messageText, isUser && { color: '#fff' }]}>{item.content}</Text>
+            <Text style={styles.messageText}>{item.content}</Text>
           </View>
 
           {isUser && (
@@ -450,9 +615,30 @@ export default function ChatScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
       <View style={styles.container}>
+        {/* ✅ 점수 모달 */}
+        <Modal
+          transparent
+          visible={scoreModalVisible}
+          animationType="fade"
+          onRequestClose={() => {}}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>
+                {endWasAuto ? '⏱ 회화 시간 종료' :'회화 종료'}
+              </Text>
+              <Text style={styles.modalScoreValue}>{latestScore}점</Text>
+
+              <Pressable style={styles.modalBtn} onPress={handleScoreConfirm}>
+                <Text style={styles.modalBtnText}>확인</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
         {/* 헤더 */}
         <View style={[styles.header, { paddingTop: insets.top }]}>
-          <TouchableOpacity onPress={handleEndChat} style={styles.iconButton}>
+          <TouchableOpacity onPress={() => handleEndChat({ auto: false })} style={styles.iconButton}>
             <Text style={styles.endChatText}>회화 종료</Text>
           </TouchableOpacity>
 
@@ -541,14 +727,9 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#e8eaf0',
-  },
-  container: {
-    flex: 1,
-    backgroundColor: '#e8eaf0',
-  },
+  safeArea: { flex: 1, backgroundColor: '#e8eaf0' },
+  container: { flex: 1, backgroundColor: '#e8eaf0' },
+
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -566,27 +747,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     columnGap: 12,
   },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#2c303c',
-  },
-  endChatText: {
-    fontSize: 12,
-    color: '#2c303c',
-    textDecorationLine: 'underline',
-  },
+  headerTitle: { fontSize: 16, fontWeight: '600', color: '#2c303c' },
+  endChatText: { fontSize: 12, color: '#2c303c', textDecorationLine: 'underline' },
   iconButton: { padding: 4 },
-  modeButtonText: {
-    fontSize: 12,
-    color: '#2c303c',
-    textDecorationLine: 'underline',
-  },
+  modeButtonText: { fontSize: 12, color: '#2c303c', textDecorationLine: 'underline' },
 
-  listContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 20,
-  },
+  listContent: { paddingHorizontal: 16, paddingBottom: 20 },
   mascotContainer: { alignItems: 'center', marginVertical: 16 },
   mascotCircle: {
     width: 128,
@@ -600,11 +766,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
 
-  messageRow: {
-    marginBottom: 4,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-  },
+  messageRow: { marginBottom: 4, flexDirection: 'row', alignItems: 'flex-end' },
   userRow: { justifyContent: 'flex-end' },
   assistantRow: { justifyContent: 'flex-start' },
 
@@ -668,16 +830,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 6,
   },
-  feedbackTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#4B5563',
-  },
-  feedbackText: {
-    fontSize: 13,
-    color: '#374151',
-    lineHeight: 18,
-  },
+  feedbackTitle: { fontSize: 12, fontWeight: '700', color: '#4B5563' },
+  feedbackText: { fontSize: 13, color: '#374151', lineHeight: 18 },
 
   suggestionContainer: {
     alignSelf: 'flex-start',
@@ -690,14 +844,44 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#FCD34D',
   },
-  suggestionTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#B45309',
+  suggestionTitle: { fontSize: 12, fontWeight: '700', color: '#B45309' },
+  suggestionText: { fontSize: 13, color: '#92400E', lineHeight: 18 },
+
+  // ✅ 모달 스타일
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
   },
-  suggestionText: {
-    fontSize: 13,
-    color: '#92400E',
-    lineHeight: 18,
+  modalCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 20,
+    alignItems: 'center',
   },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 14,
+  },
+  modalScoreText: { fontSize: 13, color: '#6B7280', marginBottom: 6 },
+  modalScoreValue: {
+    fontSize: 34,
+    fontWeight: '900',
+    color: '#111827',
+    marginBottom: 18,
+  },
+  modalBtn: {
+    width: '100%',
+    borderRadius: 14,
+    paddingVertical: 12,
+    backgroundColor: '#2c303c',
+    alignItems: 'center',
+  },
+  modalBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
 });

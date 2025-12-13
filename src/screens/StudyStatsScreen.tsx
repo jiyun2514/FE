@@ -1,5 +1,4 @@
 // src/screens/StudyStatsScreen.tsx
-
 import React, { useState, useCallback } from 'react';
 import {
   View,
@@ -11,8 +10,9 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import PandaIcon from '../components/PandaIcon';
-import { statsApi } from '../api/stats'; // ✅ client 쓰는 statsApi여야 함
+import { statsApi } from '../api/stats';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type Props = {
   navigation: any;
@@ -27,6 +27,15 @@ type StatsData = {
   newWordsLearned: number;
 };
 
+// ===== 로컬 통계 키 (ChatScreen과 동일해야 함) =====
+const STATS_KEYS = {
+  totalMinutes: 'local_stats_totalMinutes',
+  streak: 'local_stats_streak',
+  lastStudyDate: 'local_stats_lastStudyDate',
+  totalSentences: 'local_stats_totalSentences',
+  learnedSet: 'local_stats_learnedSentenceSet',
+};
+
 export default function StudyStatsScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
 
@@ -35,18 +44,15 @@ export default function StudyStatsScreen({ navigation }: Props) {
 
   // ✅ 응답 구조가 달라도 최대한 Stats payload를 뽑아내는 함수
   const extractStatsPayload = (raw: any) => {
-    // 가능한 케이스들:
-    // 1) { success: true, data: { ...Stats } }
-    // 2) { data: { ...Stats } }
-    // 3) { stats: { ...Stats } }
-    // 4) { ...Stats } (루트가 바로 Stats)
-    // 5) { success: true, data: { data: { ...Stats } } } (2중 래핑)
-    return (
-      raw?.data?.data ??
-      raw?.data ??
-      raw?.stats ??
-      raw
-    );
+    return raw?.data?.data ?? raw?.data ?? raw?.stats ?? raw;
+  };
+
+  const readLocalStats = async () => {
+    const totalMinutes = Number((await AsyncStorage.getItem(STATS_KEYS.totalMinutes)) ?? '0');
+    const streak = Number((await AsyncStorage.getItem(STATS_KEYS.streak)) ?? '0');
+    const totalSentences = Number((await AsyncStorage.getItem(STATS_KEYS.totalSentences)) ?? '0');
+
+    return { totalMinutes, streak, totalSentences };
   };
 
   const fetchStats = useCallback(async () => {
@@ -57,16 +63,14 @@ export default function StudyStatsScreen({ navigation }: Props) {
 
       const res = await statsApi.getStats();
 
-      // ✅ 원본 응답
       console.log('[StudyStats] /api/stats 원본 응답:', JSON.stringify(res.data, null, 2));
 
-      // ✅ payload 추출
       const payload = extractStatsPayload(res.data);
 
       console.log('[StudyStats] /api/stats payload:', JSON.stringify(payload, null, 2));
 
-      // ✅ 숫자 필드 매핑 (없으면 0)
-      const next: StatsData = {
+      // 서버 값(없으면 0)
+      const serverStats: StatsData = {
         totalSessions: payload?.totalSessions ?? 0,
         totalMinutes: payload?.totalMinutes ?? 0,
         avgScore: payload?.avgScore ?? 0,
@@ -75,28 +79,44 @@ export default function StudyStatsScreen({ navigation }: Props) {
         newWordsLearned: payload?.newWordsLearned ?? 0,
       };
 
-      setStats(next);
+      // ✅ 로컬 값 읽기
+      const local = await readLocalStats();
+
+      // ✅ fallback 규칙:
+      // - 서버 값이 0이면(미구현/미반영 상태) 로컬로 대체
+      // - 서버가 나중에 제대로 들어오면(0이 아니면) 서버가 우선
+      const merged: StatsData = {
+        ...serverStats,
+        totalMinutes: serverStats.totalMinutes > 0 ? serverStats.totalMinutes : local.totalMinutes,
+        streak: serverStats.streak > 0 ? serverStats.streak : local.streak,
+        newWordsLearned:
+          serverStats.newWordsLearned > 0 ? serverStats.newWordsLearned : local.totalSentences,
+      };
+
+      console.log('[StudyStats] merged stats:', merged);
+      setStats(merged);
     } catch (err: any) {
       console.log('[StudyStats] /api/stats 호출 실패');
       console.log(' - status:', err?.response?.status);
       console.log(' - data:', JSON.stringify(err?.response?.data, null, 2));
       console.log(' - message:', err?.message);
 
-      // 실패해도 화면은 유지되도록 기본값
+      // 서버 실패하면 로컬로라도 보여주기
+      const local = await readLocalStats();
+
       setStats({
         totalSessions: 0,
-        totalMinutes: 0,
+        totalMinutes: local.totalMinutes,
         avgScore: 0,
         bestScore: 0,
-        streak: 0,
-        newWordsLearned: 0,
+        streak: local.streak,
+        newWordsLearned: local.totalSentences,
       });
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // ✅ 이 화면으로 "올 때마다" 한 번만 호출 (useEffect 중복 제거)
   useFocusEffect(
     useCallback(() => {
       fetchStats();
@@ -116,9 +136,7 @@ export default function StudyStatsScreen({ navigation }: Props) {
   };
 
   const formatScore = (value: number) => {
-    if (value === null || value === undefined || Number.isNaN(value)) {
-      return '-';
-    }
+    if (value === null || value === undefined || Number.isNaN(value)) return '-';
     return Math.round(value).toString();
   };
 
@@ -131,7 +149,6 @@ export default function StudyStatsScreen({ navigation }: Props) {
 
   const pandaCount = getPandaCount();
 
-  // 로딩 화면
   if (loading || !stats) {
     return (
       <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
@@ -154,7 +171,6 @@ export default function StudyStatsScreen({ navigation }: Props) {
     );
   }
 
-  // 실제 화면
   return (
     <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
       <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -166,7 +182,6 @@ export default function StudyStatsScreen({ navigation }: Props) {
 
           <Text style={styles.headerTitle}>학습 통계</Text>
 
-          {/* 오른쪽 정렬용 더미 뷰 */}
           <View style={{ width: 32 }} />
         </View>
 
@@ -215,27 +230,24 @@ export default function StudyStatsScreen({ navigation }: Props) {
               하루 3회 이상 대화 시 10포인트 (3회마다 팬더 1개)
             </Text>
 
-            {/* 1행 */}
             <View style={styles.badgeRow}>
-              {[0, 1, 2, 3].map((idx) => (
+              {[0, 1, 2, 3].map(idx => (
                 <View key={idx} style={styles.badgeBox}>
                   {idx < pandaCount && <PandaIcon size="medium" />}
                 </View>
               ))}
             </View>
 
-            {/* 2행 */}
             <View style={styles.badgeRow}>
-              {[4, 5, 6, 7].map((idx) => (
+              {[4, 5, 6, 7].map(idx => (
                 <View key={idx} style={styles.badgeBox}>
                   {idx < pandaCount && <PandaIcon size="medium" />}
                 </View>
               ))}
             </View>
 
-            {/* 3행 */}
             <View style={styles.badgeRow}>
-              {[8, 9, 10, 11].map((idx) => (
+              {[8, 9, 10, 11].map(idx => (
                 <View key={idx} style={styles.badgeBox}>
                   {idx < pandaCount && <PandaIcon size="medium" />}
                 </View>

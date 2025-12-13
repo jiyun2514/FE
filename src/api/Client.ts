@@ -2,17 +2,18 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-//const BASE_URL = 'http://lingomate-backend.ap-northeast-2.elasticbeanstalk.com';
-const BASE_URL = 'http://10.0.2.2:8080'
+export const BASE_URL = 'http://lingomate-backend.ap-northeast-2.elasticbeanstalk.com';
+console.log('🌐 [Client.ts] BASE_URL:', BASE_URL);
+console.log('🌐 [Client.ts] BASE_URL json:', JSON.stringify(BASE_URL));
 
 const ACCESS_TOKEN_KEY = 'accessToken';
 
 const client = axios.create({
   baseURL: BASE_URL,
+  timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 15000,
 });
 
 let inMemoryToken: string | null = null;
@@ -22,43 +23,44 @@ export const setAccessToken = async (token: string | null) => {
 
   if (token) {
     await AsyncStorage.setItem(ACCESS_TOKEN_KEY, token);
+    client.defaults.headers.common.Authorization = `Bearer ${token}`;
   } else {
     await AsyncStorage.removeItem(ACCESS_TOKEN_KEY);
+    delete client.defaults.headers.common.Authorization;
   }
 };
 
 export const hydrateAccessToken = async () => {
   const token = await AsyncStorage.getItem(ACCESS_TOKEN_KEY);
   inMemoryToken = token;
+  if (token) client.defaults.headers.common.Authorization = `Bearer ${token}`;
   return token;
 };
 
-// ✅ 요청 인터셉터: 매 요청마다 토큰 붙이기 (axios v1 타입: InternalAxiosRequestConfig)
 client.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
-    // 1) 메모리 토큰 우선
+    config.headers = config.headers ?? {};
+
     let token = inMemoryToken;
 
-    // 2) 없으면 AsyncStorage에서 가져오기
     if (!token) {
       token = await AsyncStorage.getItem(ACCESS_TOKEN_KEY);
       inMemoryToken = token;
     }
 
-    // 3) 헤더 주입/제거
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     } else {
-      delete config.headers.Authorization;
+      config.headers.Authorization = undefined as any;
     }
 
-    // ✅ 디버그 로그
-    console.log(
-      '➡️ REQUEST',
-      config.method?.toUpperCase(),
-      `${config.baseURL}${config.url}`,
-    );
-    console.log('➡️ Authorization', config.headers.Authorization);
+    // 디버그 로그 
+    // console.log('➡️ REQUEST', config.method?.toUpperCase(), `${config.baseURL}${config.url}`);
+    // console.log('➡️ Authorization', config.headers.Authorization);
+    // console.log('➡️ Content-Type', (config.headers as any)['Content-Type']);
+    // console.log('🌐 axios baseURL:', config.baseURL);
+    console.log('🌐 axios url:', config.url);
+    console.log('🌐 axios full:', (config.baseURL ?? '') + (config.url ?? ''));
 
     return config;
   },

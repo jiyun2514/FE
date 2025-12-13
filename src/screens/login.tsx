@@ -141,19 +141,6 @@ const handleLogin = async () => {
             )}
           </Pressable>
 
-          {/* 🔥 개발용: 로그인 건너뛰기 버튼 */}
-          <Pressable
-            style={[styles.loginButton, { marginTop: 8, backgroundColor: '#4B5563' }]}
-            onPress={() =>
-              navigation.reset({
-                index: 0,
-                routes: [{ name: 'Home' }],
-             })
-            }
-          >
-            <Text style={styles.loginButtonText}>로그인 없이 둘러보기</Text>
-          </Pressable>
-
           <Text style={styles.smallText}>
             로그인은 Auth0 보안 페이지에서 처리되며,{'\n'}
             비밀번호는 앱이나 서버에 저장되지 않습니다.

@@ -14,6 +14,7 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
+  PermissionsAndroid,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -24,8 +25,15 @@ import {
   useFocusEffect,
 } from '@react-navigation/native';
 import { Send, Mic, Eye, Lightbulb, X } from 'lucide-react-native';
-import { aiApi, conversationApi } from '../api/Services';
+import { conversationApi } from '../api/Services'; // ✅ 너 프로젝트에 있는 conversationApi
+import { aiApi } from '../api/ai'; // ✅ 너가 올린 ai.ts (chat/feedback/tts/stt)
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// ✅ STT/TTS(백엔드)용
+import AudioRecord from 'react-native-audio-record';
+import RNFS from 'react-native-fs';
+import Sound from 'react-native-sound';
+
 
 // 타입들
 type Message = {
@@ -67,8 +75,7 @@ const isYesterday = (last: string, today: string) => {
   return ymdLocal(next) === today;
 };
 
-const normalizeSentence = (s: string) =>
-  s.trim().replace(/\s+/g, ' ').toLowerCase();
+const normalizeSentence = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
 
 // 🔍 피드백 문자열에서 [Corrected Sentence]: 부분만 뽑아내기
 const extractCorrectedSentence = (feedback?: string | null): string | null => {
@@ -130,11 +137,202 @@ export default function ChatScreen() {
   const [endWasAuto, setEndWasAuto] = useState(false);
 
   // ✅ 모달 확인 후 이동할 데이터
-  const pendingNavRef = useRef<{ sessionId?: string; reviewCards: any[] } | null>(
-    null,
-  );
+  const pendingNavRef = useRef<{ sessionId?: string; reviewCards: any[] } | null>(null);
 
-  // ✅ ChatScreen "들어갈 때마다" 타이머/플래그 리셋
+  // ============================
+  // ✅ STT (토글) / TTS (버블탭)
+  // ============================
+  const SAMPLE_RATE = 16000;
+
+  const [isRecording, setIsRecording] = useState(false);
+  const [sttLoading, setSttLoading] = useState(false);
+
+  const [ttsLoading, setTtsLoading] = useState(false);
+  const soundRef = useRef<Sound | null>(null);
+  const currentWavRef = useRef<string>('');
+
+  const requestMicPermission = async () => {
+    if (Platform.OS !== 'android') return true;
+
+    const granted = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+      {
+        title: '마이크 권한',
+        message: 'STT(음성 인식)를 위해 마이크 권한이 필요해요.',
+        buttonPositive: '허용',
+        buttonNegative: '거부',
+      },
+    );
+    return granted === PermissionsAndroid.RESULTS.GRANTED;
+  };
+
+  const stopSoundIfAny = () => {
+    try {
+      if (soundRef.current) {
+        const s = soundRef.current;
+        soundRef.current = null;
+        s.stop(() => s.release());
+      }
+    } catch {}
+  };
+
+  const audioInitedRef = useRef(false);
+
+  const startRecording = async () => {
+    const ok = await requestMicPermission();
+    if (!ok) {
+      Alert.alert('권한 필요', '마이크 권한을 허용해야 음성 인식이 가능해요.');
+      return;
+    }
+
+    try {
+    stopSoundIfAny();
+
+    // ✅ (핵심) 매번 새로운 파일명으로 녹음
+    currentWavRef.current = `stt_${Date.now()}.wav`;
+
+    // ✅ start 직전에 init (권한 승인 후)
+    AudioRecord.init({
+      sampleRate: SAMPLE_RATE,
+      channels: 1,
+      bitsPerSample: 16,
+      wavFile: currentWavRef.current,
+      audioSource: 6, // 있어도 되고 없어도 됨
+    });
+    AudioRecord.start();
+
+
+      setIsRecording(true);
+    } catch (e) {
+      console.log('❌ AudioRecord.start error:', e);
+      setIsRecording(false);
+      Alert.alert('오류', '녹음을 시작할 수 없어요.');
+    }
+  };
+
+  const stopRecordingAndSTT = async () => {
+  try {
+    setIsRecording(false);
+    setSttLoading(true);
+
+    // 1) 녹음 종료 → 실제 wav 파일 경로
+    const rawPath = String(await AudioRecord.stop());
+    if (!rawPath) {
+      Alert.alert('STT', '녹음 파일을 만들지 못했어요.');
+      return;
+    }
+
+    // 2) Android는 file:// 필요
+    const uri =
+      Platform.OS === 'android'
+        ? rawPath.startsWith('file://')
+          ? rawPath
+          : `file://${rawPath}`
+        : rawPath;
+    
+    const file = {
+      uri: uri,
+      name: rawPath.split('/').pop() ?? 'stt_record.wav',
+      type: 'audio/wav',
+    };
+
+    console.log('🎙️ STT upload (FINAL):', file);
+
+    const result = await aiApi.stt({
+      uri: file.uri,   // 🔥 새 객체로 한 번 더 정화
+      name: file.name,
+      type: file.type,
+    });
+
+    console.log('✅ STT result:', result);
+
+    // TODO: res.data에서 텍스트 꺼내서 input이나 messages에 반영
+    // 예: setInput(res.data?.text ?? '')
+
+  } catch (e: any) {
+    console.log('❌ STT failed:', e?.message ?? e);
+    console.log('❌ STT response:', e?.response?.status, e?.response?.data);
+    Alert.alert('STT', '네트워크 오류로 STT에 실패했어요.');
+  } finally {
+    setSttLoading(false);
+  }
+};
+
+
+  // ✅ 토글: 한 번 누르면 시작 / 다시 누르면 종료+STT
+  const toggleRecording = async () => {
+    if (timeUp) return;
+    if (sttLoading) return;
+
+    if (isRecording) {
+      await stopRecordingAndSTT();
+    } else {
+      await startRecording();
+    }
+  };
+
+  // ✅ AI 말풍선 탭하면 TTS
+  const speakViaBackendTTS = async (text: string) => {
+    if (!text?.trim()) return;
+    if (timeUp) return;
+
+    try {
+      setTtsLoading(true);
+
+      // 재생 중이면 stop 후 새로 재생
+      stopSoundIfAny();
+
+      const res = await aiApi.tts(text, 'us', 'female');
+      const audioBase64 = res.data?.data?.audio ?? res.data?.audio;
+      const mime = res.data?.data?.mime ?? res.data?.mime ?? 'audio/wav';
+
+      if (!audioBase64) {
+        Alert.alert('TTS', '오디오를 받지 못했어요.');
+        return;
+      }
+
+      const ext = mime.includes('wav') ? 'wav' : 'wav';
+      const filePath = `${RNFS.CachesDirectoryPath}/tts_${Date.now()}.${ext}`;
+
+      await RNFS.writeFile(filePath, audioBase64, 'base64');
+
+      Sound.setCategory('Playback');
+
+      const sound = new Sound(filePath, '', (error) => {
+        if (error) {
+          console.log('❌ Sound load error:', error);
+          Alert.alert('TTS', '오디오 재생 준비 실패');
+          setTtsLoading(false);
+          return;
+        }
+
+        soundRef.current = sound;
+
+        sound.play((success) => {
+          // 재생 끝
+          if (!success) console.log('❌ Sound play failed');
+          sound.release();
+          if (soundRef.current === sound) soundRef.current = null;
+          setTtsLoading(false);
+
+          // 캐시 파일 정리(실패해도 무시)
+          RNFS.unlink(filePath).catch(() => {});
+        });
+      });
+    } catch (e: any) {
+      
+      console.log('❌ STT error name:', e?.name);
+      console.log('❌ STT error message:', e?.message);
+      console.log('❌ STT error:', JSON.stringify(e, Object.getOwnPropertyNames(e)));
+      console.log('❌ STT isAxiosError:', e?.isAxiosError);
+      console.log('❌ STT response:', e?.response?.status, e?.response?.data);
+      console.log('❌ TTS failed:', e?.message, e?.response?.data);
+      Alert.alert('TTS 오류', '음성 생성/재생에 실패했어요.');
+      setTtsLoading(false);
+    }
+  };
+
+  // ✅ ChatScreen "들어갈 때마다" 타이머/플래그 리셋 + 녹음/재생 정리
   useFocusEffect(
     useCallback(() => {
       endedRef.current = false;
@@ -147,17 +345,32 @@ export default function ChatScreen() {
       setEndWasAuto(false);
       pendingNavRef.current = null;
 
+      // 타이머 정리
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
+
+      // 녹음/재생 정리
+      if (isRecording) {
+        setIsRecording(false);
+        AudioRecord.stop().catch(() => {});
+      }
+      stopSoundIfAny();
 
       return () => {
         if (timerRef.current) {
           clearInterval(timerRef.current);
           timerRef.current = null;
         }
+        // 화면 나갈 때도 정리
+        if (isRecording) {
+          setIsRecording(false);
+          AudioRecord.stop().catch(() => {});
+        }
+        stopSoundIfAny();
       };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   );
 
@@ -167,14 +380,11 @@ export default function ChatScreen() {
       try {
         const res = await conversationApi.startSession();
 
-        // ✅ successResponse 구조라면 보통: { success: true, data: {...} }
         if (res.data?.success && res.data?.data) {
           const sid = String((res.data.data as any).sessionId);
           setSessionId(sid);
 
-          const st = (res.data.data as any).startTime
-            ? String((res.data.data as any).startTime)
-            : null;
+          const st = (res.data.data as any).startTime ? String((res.data.data as any).startTime) : null;
           setServerStartTime(st);
 
           setSessionStartMs(Date.now());
@@ -232,7 +442,6 @@ export default function ChatScreen() {
   const handleEndChat = async (opts?: { auto?: boolean }) => {
     const isAuto = opts?.auto === true;
 
-    // ✅ 중복 종료 방지
     if (endedRef.current) return;
     endedRef.current = true;
 
@@ -243,6 +452,15 @@ export default function ChatScreen() {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+
+    // ✅ 녹음/재생 정리
+    if (isRecording) {
+      try {
+        setIsRecording(false);
+        await AudioRecord.stop();
+      } catch {}
+    }
+    stopSoundIfAny();
 
     // ReviewCards 생성
     const reviewCards = messages
@@ -258,11 +476,11 @@ export default function ChatScreen() {
       })
       .filter((c): c is { corrected: string; explanation: string } => c !== null);
 
-    // ✅ (프론트만) 로컬 통계 업데이트 (네 기존 코드 유지)
+    // ✅ (프론트만) 로컬 통계 업데이트
     try {
       const durationMsLocal =
         sessionStartMs != null ? Math.max(0, Date.now() - sessionStartMs) : 0;
-      const addMinutes = Math.max(1, Math.ceil(durationMsLocal / 60000)); // 최소 1분
+      const addMinutes = Math.max(1, Math.ceil(durationMsLocal / 60000));
 
       const prevMinutes = Number(
         (await AsyncStorage.getItem(STATS_KEYS.totalMinutes)) ?? '0',
@@ -274,9 +492,7 @@ export default function ChatScreen() {
 
       const todayKey = ymdLocal(new Date());
       const lastKey = await AsyncStorage.getItem(STATS_KEYS.lastStudyDate);
-      const prevStreak = Number(
-        (await AsyncStorage.getItem(STATS_KEYS.streak)) ?? '0',
-      );
+      const prevStreak = Number((await AsyncStorage.getItem(STATS_KEYS.streak)) ?? '0');
 
       let newStreak = prevStreak;
       if (!lastKey) newStreak = 1;
@@ -325,7 +541,6 @@ export default function ChatScreen() {
       console.log('❌ Local stats update failed:', e);
     }
 
-    // sessionId 없으면 점수 없이 Review로 (원하면 여기서도 모달 띄워도 됨)
     if (!sessionId) {
       navigation.navigate('Review', { reviewCards });
       return;
@@ -333,8 +548,7 @@ export default function ChatScreen() {
 
     const finishedAtIso = new Date().toISOString();
     const startedAtIso =
-      serverStartTime ??
-      (sessionStartMs ? new Date(sessionStartMs).toISOString() : null);
+      serverStartTime ?? (sessionStartMs ? new Date(sessionStartMs).toISOString() : null);
     const durationMs =
       sessionStartMs != null ? Math.max(0, Date.now() - sessionStartMs) : undefined;
 
@@ -350,34 +564,20 @@ export default function ChatScreen() {
     };
 
     try {
-      console.log("🔥 conversationApi:", conversationApi);
-      console.log("🔥 finishSession URL (try1):", (conversationApi as any)?.defaults?.baseURL);
-      console.log("🔥 finishSession URL (try2):", (conversationApi as any)?.client?.defaults?.baseURL);
-
-  // 2) finishSession 호출
       const res = await conversationApi.finishSession(payload as any);
-
-  // 3) raw 응답 확인
-      console.log('🔥 finishSession raw:', JSON.stringify(res.data, null, 2));
-
       const resBody = res.data as any;
-
-  // 4) score 후보 여러 경로 커버
       const data = resBody?.data ?? resBody;
 
       const scoreCandidate =
-      data?.scoreSaved ??           // ✅ 너 백엔드가 주는 키
-      data?.score ??                // (혹시 다른 버전 대비)
-      resBody?.scoreSaved ??
-      resBody?.score ??
-      data?.conversation?.score ??
-      data?.result?.score;
+        data?.scoreSaved ??
+        data?.score ??
+        resBody?.scoreSaved ??
+        resBody?.score ??
+        data?.conversation?.score ??
+        data?.result?.score;
 
       const score = Number.isFinite(Number(scoreCandidate)) ? Number(scoreCandidate) : 0;
 
-      console.log("🔥 scoreCandidate:", scoreCandidate, "=> score:", score);
-
-      // 저장 실패해도 모달은 띄우고 Review로 가게(점수 0)
       openScoreModal({
         score,
         isAuto,
@@ -397,7 +597,6 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!isFocused || timeUp) return;
 
-    // 이미 interval 있으면 중복 방지
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
@@ -413,7 +612,6 @@ export default function ChatScreen() {
 
           setTimeUp(true);
 
-          // ✅ 시간 끝나면 자동 종료(저장+모달)
           if (isFocused) {
             handleEndChat({ auto: true });
           }
@@ -446,12 +644,13 @@ export default function ChatScreen() {
     );
 
     try {
-      const res = await aiApi.getFeedback(content);
+      const res = await aiApi.feedback(content);
 
       if (res.data.success && res.data.data) {
         const data: any = res.data.data;
         let feedbackText = '';
 
+        // 너 기존 로직 유지 (AI 서버 응답 형식에 따라 맞춰)
         if (data.natural === false) {
           feedbackText =
             `[Corrected Sentence]: ${data.corrected_en}\n` +
@@ -459,7 +658,8 @@ export default function ChatScreen() {
         } else if (data.natural === true) {
           feedbackText = `${data.message}`;
         } else {
-          throw new Error('Invalid feedback format');
+          // 혹시 그냥 text 형태면 그대로
+          feedbackText = `${data.text ?? ''}`.trim();
         }
 
         setMessages(prev =>
@@ -501,8 +701,14 @@ export default function ChatScreen() {
     if (timeUp) {
       Alert.alert(
         '시간 종료',
-        '10분이 지나서 더 이상 메시지를 보낼 수 없습니다.\n자동으로 종료되었어요.',
+        '10분이 지나 더 이상 메시지를 보낼 수 없습니다.\n자동으로 종료됩니다.',
       );
+      return;
+    }
+
+    // ✅ 녹음 중이면 전송 막기 (UX)
+    if (isRecording || sttLoading) {
+      Alert.alert('녹음 중', '녹음을 종료한 뒤에 전송할 수 있습니다.');
       return;
     }
 
@@ -519,12 +725,13 @@ export default function ChatScreen() {
     setIsLoading(true);
 
     try {
-      const res = await aiApi.chat(input);
+      const res = await aiApi.chat(userMessage.content);
       if (res.data.success && res.data.data) {
+        const assistantText = res.data.data.text ?? res.data.data?.message ?? '';
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          content: res.data.data.text,
+          content: assistantText,
         };
         setMessages(prev => [...prev, assistantMessage]);
       }
@@ -562,9 +769,24 @@ export default function ChatScreen() {
             </TouchableOpacity>
           )}
 
-          <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-            <Text style={styles.messageText}>{item.content}</Text>
-          </View>
+          {/* ✅ AI 말풍선 탭 => TTS */}
+          {isUser ? (
+            <View style={[styles.bubble, styles.userBubble]}>
+              <Text style={styles.messageText}>{item.content}</Text>
+            </View>
+          ) : (
+            <TouchableOpacity
+              activeOpacity={0.75}
+              onPress={() => speakViaBackendTTS(item.content)}
+              style={[styles.bubble, styles.assistantBubble]}
+              disabled={ttsLoading || isRecording || sttLoading}
+            >
+              <Text style={styles.messageText}>{item.content}</Text>
+              <Text style={{ fontSize: 11, marginTop: 6, color: '#6B7280' }}>
+                {ttsLoading ? '🔊 재생 준비/재생 중...' : '🔊 탭해서 듣기'}
+              </Text>
+            </TouchableOpacity>
+          )}
 
           {isUser && (
             <TouchableOpacity
@@ -612,6 +834,8 @@ export default function ChatScreen() {
     );
   };
 
+  const sendDisabled = !input.trim() || isLoading || timeUp || isRecording || sttLoading;
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
       <View style={styles.container}>
@@ -625,10 +849,9 @@ export default function ChatScreen() {
           <View style={styles.modalOverlay}>
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>
-                {endWasAuto ? '⏱ 회화 시간 종료' :'회화 종료'}
+                {endWasAuto ? '⏱ 회화 시간 종료' : '회화 종료'}
               </Text>
               <Text style={styles.modalScoreValue}>{latestScore}점</Text>
-
               <Pressable style={styles.modalBtn} onPress={handleScoreConfirm}>
                 <Text style={styles.modalBtnText}>확인</Text>
               </Pressable>
@@ -700,26 +923,62 @@ export default function ChatScreen() {
                 placeholder="Hello, how are you today?"
                 placeholderTextColor="#9ca3af"
                 multiline={false}
-                onSubmitEditing={handleFormSubmit}
+                onSubmitEditing={() => {
+                  // ✅ 엔터 전송도 녹음 중엔 막기
+                  if (isRecording || sttLoading) return;
+                  handleFormSubmit();
+                }}
                 returnKeyType="send"
-                editable={!timeUp}
+                editable={!timeUp && !sttLoading}
               />
-              <TouchableOpacity style={styles.micButton}>
-                <Mic color="#9ca3af" size={20} />
+
+              {/* ✅ STT 토글 버튼 */}
+              <TouchableOpacity
+                style={styles.micButton}
+                onPress={toggleRecording}
+                disabled={timeUp || sttLoading}
+              >
+                {sttLoading ? (
+                  <ActivityIndicator size="small" color="#ef4444" />
+                ) : (
+                  <Mic color={isRecording ? '#ef4444' : '#9ca3af'} size={20} />
+                )}
               </TouchableOpacity>
             </View>
 
+            {/* ✅ 녹음 중에는 보내기 비활성화 */}
             <TouchableOpacity
               onPress={handleFormSubmit}
-              disabled={!input.trim() || isLoading || timeUp}
+              disabled={sendDisabled}
               style={[
                 styles.sendButton,
-                (!input.trim() || isLoading || timeUp) && styles.disabledButton,
+                sendDisabled && styles.disabledButton,
               ]}
             >
               <Send color="#fff" size={18} />
             </TouchableOpacity>
           </View>
+
+          {/* 상태 안내 */}
+          {(isRecording || sttLoading || ttsLoading) && (
+            <View style={{ alignItems: 'center', paddingBottom: 10 }}>
+              {isRecording && (
+                <Text style={{ fontSize: 12, color: '#ef4444' }}>
+                  🎙️ 녹음 중…
+                </Text>
+              )}
+              {sttLoading && (
+                <Text style={{ fontSize: 12, color: '#6b7280' }}>
+                  🧠 음성 인식 중…
+                </Text>
+              )}
+              {ttsLoading && (
+                <Text style={{ fontSize: 12, color: '#6b7280' }}>
+                  🔊 음성 생성/재생 중…
+                </Text>
+              )}
+            </View>
+          )}
         </KeyboardAvoidingView>
       </View>
     </SafeAreaView>
@@ -869,7 +1128,6 @@ const styles = StyleSheet.create({
     color: '#111827',
     marginBottom: 14,
   },
-  modalScoreText: { fontSize: 13, color: '#6B7280', marginBottom: 6 },
   modalScoreValue: {
     fontSize: 34,
     fontWeight: '900',

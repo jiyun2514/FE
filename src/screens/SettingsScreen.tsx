@@ -1,4 +1,3 @@
-
 // src/screens/SettingsScreen.tsx
 
 import React, { useState, useEffect } from 'react';
@@ -15,6 +14,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { ChevronLeft } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { launchImageLibrary } from 'react-native-image-picker';
+import { notificationsApi } from '../api/notifications';
 
 const pandaImg = require('../assets/images/panda-mascot.png');
 
@@ -28,23 +28,46 @@ export default function SettingsScreen({ navigation }: any) {
 
   const insets = useSafeAreaInsets();
 
-  const togglePush = () => setPushEnabled(prev => !prev);
+  // ✅ 서버에 저장까지 하는 토글
+  const togglePush = async () => {
+    const next = !pushEnabled;
+
+    // UI 먼저 반응
+    setPushEnabled(next);
+
+    try {
+      const res = await notificationsApi.updateSettings(next);
+      const saved = !!res.data?.data?.enabled;
+      setPushEnabled(saved); // 서버 값으로 확정
+    } catch (e) {
+      console.log('알림 설정 저장 실패:', e);
+      // 실패하면 원복
+      setPushEnabled(!next);
+      Alert.alert('오류', '알림 설정 저장에 실패했어요.');
+    }
+  };
 
   // 🔹 앱 시작 & 화면 진입 시 한번 불러오기
   useEffect(() => {
-    const loadProfile = async () => {
+    const loadAll = async () => {
       try {
+        // 1) 프로필(로컬)
         const storedName = await AsyncStorage.getItem('userName');
         const storedAvatar = await AsyncStorage.getItem('userAvatarUri');
 
         if (storedName) setUserName(storedName);
         if (storedAvatar) setAvatarUri(storedAvatar);
+
+        // 2) 알림 설정(서버)
+        const res = await notificationsApi.getSettings();
+        const enabled = !!res.data?.data?.enabled;
+        setPushEnabled(enabled);
       } catch (e) {
-        console.log('프로필 불러오기 실패:', e);
+        console.log('설정 불러오기 실패:', e);
       }
     };
 
-    loadProfile();
+    loadAll();
   }, []);
 
   // 🔹 이름 저장 함수

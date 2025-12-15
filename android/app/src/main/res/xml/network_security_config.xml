@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+
+  <!-- ✅ 기본적으로 cleartext 허용(개발용) -->
+  <base-config cleartextTrafficPermitted="true" />
+
+  <!-- ✅ 에뮬레이터 → PC Metro -->
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="false">10.0.2.2</domain>
+  </domain-config>
+
+  <!-- ✅ (선택) localhost도 허용 -->
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="false">localhost</domain>
+  </domain-config>
+
+  <!-- ✅ 네 백엔드 도메인 -->
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="true">lingomate-backend.ap-northeast-2.elasticbeanstalk.com</domain>
+  </domain-config>
+
+</network-security-config>

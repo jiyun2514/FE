@@ -5,27 +5,61 @@ import {
   View,
   Text,
   StyleSheet,
-  TextInput,
   Pressable,
   TouchableOpacity,
+  Alert,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChevronLeft } from 'lucide-react-native';
+import { auth0, REDIRECT_URI } from '../api/auth';
 
-export default function ChangePasswordScreen({ navigation }: any) {
-  const [currentPw, setCurrentPw] = useState('');
-  const [newPw, setNewPw] = useState('');
-  const [newPwCheck, setNewPwCheck] = useState('');
+type Props = {
+  navigation: any;
+};
 
+export default function ChangePasswordScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const [loading, setLoading] = useState(false);
+
+  const handleOpenResetPage = async () => {
+  if (loading) return;
+  setLoading(true);
+
+  try {
+    // 1️⃣ 기존 Auth0 세션(SSO) 끊기
+    try {
+      await auth0.webAuth.clearSession({ federated: true });
+    } catch (err) {
+      console.log('clearSession error (ignored):', err);
+    }
+
+    // 2️⃣ 무조건 로그인 화면 다시 띄우기
+    await auth0.webAuth.authorize({
+      scope: 'openid profile email',
+      redirectUrl: REDIRECT_URI,
+      additionalParameters: {
+        prompt: 'login',
+      },
+    });
+  } catch (e) {
+    console.log('open auth0 login error:', e);
+    Alert.alert(
+      '오류',
+      '비밀번호 재설정 화면으로 이동하는 중 문제가 발생했습니다.',
+    );
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   return (
     <SafeAreaView
       style={styles.safeArea}
-      edges={['left', 'right', 'bottom']} // 상단은 insets.top으로 직접 처리
+      edges={['left', 'right', 'bottom']}
     >
       <View style={[styles.root, { paddingTop: insets.top }]}>
-        {/* === ChatScreen과 동일한 형태의 헤더 === */}
+        {/* === 헤더 === */}
         <View style={styles.header}>
           <TouchableOpacity
             onPress={() => navigation.goBack()}
@@ -34,53 +68,30 @@ export default function ChangePasswordScreen({ navigation }: any) {
             <ChevronLeft color="#2c303c" size={24} />
           </TouchableOpacity>
 
-          <Text style={styles.headerTitle}>비밀번호 변경</Text>
+          <Text style={styles.headerTitle}>비밀번호 변경 및 찾기</Text>
 
-          {/* 오른쪽 정렬용 더미 뷰 */}
-          <View style={{ width: 24 }} />
+          {/* 오른쪽 정렬용 빈 공간 */}
+          <View style={{ width: 32 }} />
         </View>
 
-        {/* ===== 본문 영역 ===== */}
+        {/* === 본문 === */}
         <View style={styles.content}>
-          {/* 입력창 */}
-          <View style={styles.formArea}>
-            <Text style={styles.inputLabel}>현재 비밀번호</Text>
-            <TextInput
-              style={styles.inputBox}
-              secureTextEntry
-              placeholder="현재 비밀번호"
-              placeholderTextColor="#9ca3af"
-              value={currentPw}
-              onChangeText={setCurrentPw}
-            />
+          <Text style={styles.description}>
+            Auth0 로그인 화면에서{'\n'}
+            <Text style={{ fontWeight: '600' }}>"Forgot your password?"</Text>를 눌러주세요.
+          </Text>
 
-            <Text style={styles.inputLabel}>새 비밀번호</Text>
-            <TextInput
-              style={styles.inputBox}
-              secureTextEntry
-              placeholder="새 비밀번호"
-              placeholderTextColor="#9ca3af"
-              value={newPw}
-              onChangeText={setNewPw}
-            />
-
-            <Text style={styles.inputLabel}>새 비밀번호 확인</Text>
-            <TextInput
-              style={styles.inputBox}
-              secureTextEntry
-              placeholder="새 비밀번호 확인"
-              placeholderTextColor="#9ca3af"
-              value={newPwCheck}
-              onChangeText={setNewPwCheck}
-            />
-          </View>
-
-          {/* 버튼 */}
           <Pressable
-            style={styles.submitButton}
-            onPress={() => navigation.navigate('Settings')}
+            style={[
+              styles.submitButton,
+              loading && { opacity: 0.6 },
+            ]}
+            onPress={handleOpenResetPage}
+            disabled={loading}
           >
-            <Text style={styles.submitButtonText}>비밀번호 변경</Text>
+            <Text style={styles.submitButtonText}>
+              비밀번호 변경 및 찾기
+            </Text>
           </Pressable>
         </View>
       </View>
@@ -122,6 +133,13 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 24,
     paddingTop: 24,
+  },
+
+  description: {
+    fontSize: 14,
+    color: '#4b5563',
+    lineHeight: 20,
+    marginBottom: 24,
   },
 
   formArea: {

@@ -11,6 +11,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import PandaIcon from '../components/PandaIcon';
 import { homeApi } from '../api/Services';
+import client from '../api/Client';
 
 type Props = {
   navigation: any;

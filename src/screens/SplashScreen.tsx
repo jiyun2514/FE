@@ -1,13 +1,11 @@
 // src/screens/SplashScreen.tsx
-
 import React, { useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  SafeAreaView,
-} from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView } from 'react-native';
 import PandaIcon from '../components/PandaIcon';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { authApi } from '../api/auth';
+import { setAccessToken } from '../api/Client';
 
 type Props = {
   navigation: any;
@@ -15,21 +13,55 @@ type Props = {
 
 export default function SplashScreen({ navigation }: Props) {
   useEffect(() => {
-    // 2초 정도 보여준 뒤 로그인 화면으로 이동
-    const timer = setTimeout(() => {
-      navigation.replace('Login'); // 필요하면 'Home'으로 바꿔도 됨
-    }, 2000);
+    const bootstrap = async () => {
+      // splash animation delay
+      await new Promise<void>((resolve) => setTimeout(resolve, 1200));
 
-    return () => clearTimeout(timer);
+      const token = await AsyncStorage.getItem('accessToken');
+
+      if (!token) {
+        navigation.replace('Login');
+        return;
+      }
+
+      try {
+        // ✅ ensure axios has the token before any API calls
+        await setAccessToken(token);
+
+        // ✅ 1) try strict me
+        await authApi.getMyAuthInfo();
+
+        // if ok -> go home
+        navigation.replace('Home');
+      } catch (err: any) {
+        const status = err?.response?.status;
+
+        // ✅ If user missing in DB, register then go home
+        if (status === 404) {
+          try {
+            await authApi.registerIfNeeded(); // sends POST /auth/register-if-needed
+            navigation.replace('Home');
+            return;
+          } catch (e) {
+            // fall through to logout
+          }
+        }
+
+        // ✅ token invalid/expired or register failed -> clear and go Login
+        await setAccessToken(null);
+        await AsyncStorage.removeItem('accessToken');
+        navigation.replace('Login');
+      }
+    };
+
+    bootstrap();
   }, [navigation]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        {/* 중앙 팬다 + 로딩 점 3개 */}
         <View style={styles.centerBlock}>
           <PandaIcon size="large" />
-
           <View style={styles.dotsRow}>
             <View style={[styles.dot, styles.dotActive]} />
             <View style={[styles.dot, styles.dotMedium]} />
@@ -37,7 +69,6 @@ export default function SplashScreen({ navigation }: Props) {
           </View>
         </View>
 
-        {/* 하단 로고 + 언어 텍스트 */}
         <View style={styles.bottomBlock}>
           <View style={styles.logoRow}>
             <Text style={styles.logoText}>LING</Text>
@@ -54,7 +85,6 @@ export default function SplashScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    // 그라디언트 대신 연한 단색 배경 (나중에 linear-gradient로 바꿔도 됨)
     backgroundColor: '#f4f5f8',
   },
   container: {

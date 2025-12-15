@@ -1,549 +1,1177 @@
 // src/screens/ChatScreen.tsx
 import PandaIcon from '../components/PandaIcon';
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
-    View,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    StyleSheet,
-    FlatList,
-    KeyboardAvoidingView,
-    Platform,
-    Alert,
-    ActivityIndicator,
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  PermissionsAndroid,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
-import { ChevronLeft, Send, Mic, Eye, Lightbulb, X } from 'lucide-react-native';
-import { aiApi, conversationApi } from '../api/Services';
-import { ChatMessage } from '../types/api';
+import {
+  useNavigation,
+  useRoute,
+  RouteProp,
+  useIsFocused,
+  useFocusEffect,
+} from '@react-navigation/native';
+import { Send, Mic, Eye, Lightbulb, X } from 'lucide-react-native';
+import { conversationApi } from '../api/Services'; // ✅ 너 프로젝트에 있는 conversationApi
+import { aiApi } from '../api/ai'; // ✅ 너가 올린 ai.ts (chat/feedback/tts/stt)
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// ✅ STT/TTS(백엔드)용
+import AudioRecord from 'react-native-audio-record';
+import RNFS from 'react-native-fs';
+import Sound from 'react-native-sound';
+
 
 // 타입들
 type Message = {
-    id: string;
-    role: 'user' | 'assistant';
-    content: string;
-    feedback?: string | null;
-    suggestion?: string | null;
-    isLoadingExtra?: boolean;
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  feedback?: string | null;
+  suggestion?: string | null;
+  isLoadingExtra?: boolean;
 };
 
 type RootStackParamList = {
-    Home: undefined;
-    Chat: { mode?: string };
-    Review: undefined;
+  Home: undefined;
+  Chat: { mode?: string };
+  Review: any;
+};
+
+// ===== 로컬 통계 키 =====
+const STATS_KEYS = {
+  totalMinutes: 'local_stats_totalMinutes',
+  streak: 'local_stats_streak',
+  lastStudyDate: 'local_stats_lastStudyDate', // "YYYY-MM-DD"
+  totalSentences: 'local_stats_totalSentences',
+  learnedSet: 'local_stats_learnedSentenceSet', // JSON string array
+};
+
+const ymdLocal = (date: Date) => {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const isYesterday = (last: string, today: string) => {
+  const [y, m, d] = last.split('-').map(Number);
+  const lastDate = new Date(y, m - 1, d);
+  const next = new Date(lastDate);
+  next.setDate(lastDate.getDate() + 1);
+  return ymdLocal(next) === today;
+};
+
+const normalizeSentence = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+
+// 🔍 피드백 문자열에서 [Corrected Sentence]: 부분만 뽑아내기
+const extractCorrectedSentence = (feedback?: string | null): string | null => {
+  if (!feedback) return null;
+  const match = feedback.match(/\[Corrected Sentence\]:\s*(.+)/);
+  if (!match) return null;
+  return match[1].trim();
+};
+
+// 🔍 피드백 문자열에서 [Explanation]: 부분만 뽑아내기
+const extractExplanation = (feedback?: string | null): string | null => {
+  if (!feedback) return null;
+  const match = feedback.match(/\[Explanation\]:\s*([\s\S]+)/);
+  if (!match) return null;
+  return match[1].trim();
 };
 
 export default function ChatScreen() {
-    const navigation = useNavigation<any>();
-    const route = useRoute<RouteProp<RootStackParamList, 'Chat'>>();
-    const insets = useSafeAreaInsets();
+  const navigation = useNavigation<any>();
+  const route = useRoute<RouteProp<RootStackParamList, 'Chat'>>();
+  const insets = useSafeAreaInsets();
+  const isFocused = useIsFocused();
 
-    const initialMode = route.params?.mode || 'casual';
-    const [mode, setMode] = useState(initialMode);
+  const TIMER_MS = 10 * 60 * 1000;
 
-    const [messages, setMessages] = useState<Message[]>([
-        {
-            id: 'init',
-            role: 'assistant',
-            content: "Hello! How are you today? Let's practice English!",
-            suggestion: null,
-        },
+  const initialMode = route.params?.mode || 'casual';
+  const [mode, setMode] = useState(initialMode);
+
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      id: 'init',
+      role: 'assistant',
+      content: "Hello! How are you today? Let's practice English!",
+      suggestion: null,
+    },
+  ]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const [sessionId, setSessionId] = useState<string | null>(null);
+
+  // ✅ 세션 시작 시각(로컬) + 서버 startTime 저장
+  const [sessionStartMs, setSessionStartMs] = useState<number | null>(null);
+  const [serverStartTime, setServerStartTime] = useState<string | null>(null);
+
+  const flatListRef = useRef<FlatList>(null);
+
+  // ⏱ 10분 제한 관련 상태
+  const [timeUp, setTimeUp] = useState(false);
+  const [remainingMs, setRemainingMs] = useState(TIMER_MS);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ✅ 종료 중복 방지
+  const endedRef = useRef(false);
+
+  // ✅ 점수 모달
+  const [scoreModalVisible, setScoreModalVisible] = useState(false);
+  const [latestScore, setLatestScore] = useState<number>(0);
+  const [endWasAuto, setEndWasAuto] = useState(false);
+
+  // ✅ 모달 확인 후 이동할 데이터
+  const pendingNavRef = useRef<{ sessionId?: string; reviewCards: any[] } | null>(null);
+
+  // ============================
+  // ✅ STT (토글) / TTS (버블탭)
+  // ============================
+  const SAMPLE_RATE = 16000;
+
+  const [isRecording, setIsRecording] = useState(false);
+  const [sttLoading, setSttLoading] = useState(false);
+
+  const [ttsLoading, setTtsLoading] = useState(false);
+  const soundRef = useRef<Sound | null>(null);
+  const currentWavRef = useRef<string>('');
+
+  const requestMicPermission = async () => {
+    if (Platform.OS !== 'android') return true;
+
+    const granted = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+      {
+        title: '마이크 권한',
+        message: 'STT(음성 인식)를 위해 마이크 권한이 필요해요.',
+        buttonPositive: '허용',
+        buttonNegative: '거부',
+      },
+    );
+    return granted === PermissionsAndroid.RESULTS.GRANTED;
+  };
+
+  const stopSoundIfAny = () => {
+    try {
+      if (soundRef.current) {
+        const s = soundRef.current;
+        soundRef.current = null;
+        s.stop(() => s.release());
+      }
+    } catch {}
+  };
+
+
+  const startRecording = async () => {
+    const ok = await requestMicPermission();
+    if (!ok) {
+      Alert.alert('권한 필요', '마이크 권한을 허용해야 음성 인식이 가능해요.');
+      return;
+    }
+
+    try {
+    stopSoundIfAny();
+
+    // ✅ (핵심) 매번 새로운 파일명으로 녹음
+    currentWavRef.current = `stt_${Date.now()}.wav`;
+
+    // ✅ start 직전에 init (권한 승인 후)
+    AudioRecord.init({
+      sampleRate: SAMPLE_RATE,
+      channels: 1,
+      bitsPerSample: 16,
+      wavFile: currentWavRef.current,
+      audioSource: 6, // 있어도 되고 없어도 됨
+    });
+    AudioRecord.start();
+
+
+      setIsRecording(true);
+    } catch (e) {
+      console.log('❌ AudioRecord.start error:', e);
+      setIsRecording(false);
+      Alert.alert('오류', '녹음을 시작할 수 없어요.');
+    }
+  };
+
+  const stopRecordingAndSTT = async () => {
+    try {
+      setIsRecording(false);
+      setSttLoading(true);
+  
+      // 1️⃣ 녹음 종료 → wav 경로
+      const rawPath = String(await AudioRecord.stop());
+      if (!rawPath) {
+        Alert.alert('STT', '녹음 파일을 만들지 못했어요.');
+        return;
+      }
+  
+      const path =
+        Platform.OS === 'android'
+          ? rawPath.replace(/^file:\/\//, '')
+          : rawPath;
+
+      console.log('🎙️ STT wav path:', path);
+      // 파일 존재 여부/크기 확인 (업로드 실패 원인 추적)
+      const RNFS = require('react-native-fs');
+      const exists = await RNFS.exists(path);
+      if (!exists) {
+        Alert.alert('STT', '녹음 파일을 찾지 못했어요.');
+        return;
+      }
+      try {
+        const stat = await RNFS.stat(path);
+        console.log('🎙️ STT file stat:', {
+          size: stat.size,
+          isFile: stat.isFile(),
+          mtime: stat.mtime,
+        });
+      } catch (e: any) {
+        console.log('⚠️ STT stat error:', e?.message || e);
+      }
+  
+      // 2️⃣ STT 호출 (multipart 업로드)
+      const result = await aiApi.stt(path);
+  
+      console.log('✅ STT result:', result);
+  
+      // 3️⃣ 인식된 텍스트 반영
+      if (result?.text) {
+        setInput(result.text);
+      }
+    } catch (e: any) {
+      console.log('❌ STT failed:', e?.message, e?.response?.data);
+      console.log('❌ STT debug:', {
+        name: e?.name,
+        status: e?.response?.status,
+        data: e?.response?.data,
+        stack: e?.stack,
+      });
+      Alert.alert('STT', '음성 인식에 실패했어요.');
+    } finally {
+      setSttLoading(false);
+    }
+  };
+
+
+  // ✅ 토글: 한 번 누르면 시작 / 다시 누르면 종료+STT
+  const toggleRecording = async () => {
+    if (timeUp || sttLoading || ttsLoading) return;
+    if (isRecording) {
+      await stopRecordingAndSTT();
+    } else {
+      await startRecording();
+    }
+  };
+
+  // ✅ AI 말풍선 탭하면 TTS
+  const speakViaBackendTTS = async (text: string) => {
+    if (!text?.trim()) return;
+    if (timeUp) return;
+
+    try {
+      setTtsLoading(true);
+
+      // 재생 중이면 stop 후 새로 재생
+      stopSoundIfAny();
+
+      const res = await aiApi.tts(text, 'us', 'female');
+      const audioBase64 = res.data?.data?.audio ?? res.data?.audio;
+      const mime = res.data?.data?.mime ?? res.data?.mime ?? 'audio/wav';
+
+      if (!audioBase64) {
+        Alert.alert('TTS', '오디오를 받지 못했어요.');
+        return;
+      }
+
+      const ext = mime.includes('wav') ? 'wav' : 'wav';
+      const filePath = `${RNFS.CachesDirectoryPath}/tts_${Date.now()}.${ext}`;
+
+      await RNFS.writeFile(filePath, audioBase64, 'base64');
+
+      Sound.setCategory('Playback');
+
+      const sound = new Sound(filePath, '', (error) => {
+        if (error) {
+          console.log('❌ Sound load error:', error);
+          Alert.alert('TTS', '오디오 재생 준비 실패');
+          setTtsLoading(false);
+          return;
+        }
+
+        soundRef.current = sound;
+
+        sound.play((success) => {
+          // 재생 끝
+          if (!success) console.log('❌ Sound play failed');
+          sound.release();
+          if (soundRef.current === sound) soundRef.current = null;
+          setTtsLoading(false);
+
+          // 캐시 파일 정리(실패해도 무시)
+          RNFS.unlink(filePath).catch(() => {});
+        });
+      });
+    } catch (e: any) {
+      
+      console.log('❌ STT error name:', e?.name);
+      console.log('❌ STT error message:', e?.message);
+      console.log('❌ STT error:', JSON.stringify(e, Object.getOwnPropertyNames(e)));
+      console.log('❌ STT isAxiosError:', e?.isAxiosError);
+      console.log('❌ STT response:', e?.response?.status, e?.response?.data);
+      console.log('❌ TTS failed:', e?.message, e?.response?.data);
+      Alert.alert('TTS 오류', '음성 생성/재생에 실패했어요.');
+      setTtsLoading(false);
+    }
+  };
+
+  // ✅ ChatScreen "들어갈 때마다" 타이머/플래그 리셋 + 녹음/재생 정리
+  useFocusEffect(
+    useCallback(() => {
+      endedRef.current = false;
+
+      setTimeUp(false);
+      setRemainingMs(TIMER_MS);
+
+      setScoreModalVisible(false);
+      setLatestScore(0);
+      setEndWasAuto(false);
+      pendingNavRef.current = null;
+
+      // 타이머 정리
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+
+      // 녹음/재생 정리
+      if (isRecording) {
+        setIsRecording(false);
+        AudioRecord.stop().catch(() => {});
+      }
+      stopSoundIfAny();
+
+      return () => {
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+        // 화면 나갈 때도 정리
+        if (isRecording) {
+          setIsRecording(false);
+          AudioRecord.stop().catch(() => {});
+        }
+        stopSoundIfAny();
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []),
+  );
+
+  // 1) 세션 시작 (mount 1회)
+  useEffect(() => {
+    const initSession = async () => {
+      try {
+        const res = await conversationApi.startSession();
+
+        if (res.data?.success && res.data?.data) {
+          const sid = String((res.data.data as any).sessionId);
+          setSessionId(sid);
+
+          const st = (res.data.data as any).startTime ? String((res.data.data as any).startTime) : null;
+          setServerStartTime(st);
+
+          setSessionStartMs(Date.now());
+
+          console.log('Session Started:', sid, 'startTime:', st);
+        } else {
+          console.log('startSession unexpected response:', res.data);
+        }
+      } catch (error) {
+        console.error('Failed to start session:', error);
+        Alert.alert('Error', '대화 세션을 시작할 수 없습니다.');
+      }
+    };
+
+    initSession();
+  }, []);
+
+  // 남은 시간 mm:ss 포맷
+  const formatTime = (ms: number) => {
+    const totalSeconds = Math.floor(ms / 1000);
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  // ✅ 점수 모달 열기
+  const openScoreModal = (opts: {
+    score: number;
+    isAuto: boolean;
+    nav: { sessionId?: string; reviewCards: any[] };
+  }) => {
+    setLatestScore(opts.score ?? 0);
+    setEndWasAuto(opts.isAuto);
+    pendingNavRef.current = opts.nav;
+    setScoreModalVisible(true);
+  };
+
+  // ✅ 모달 확인 누르면 Review로 이동
+  const handleScoreConfirm = () => {
+    const nav = pendingNavRef.current;
+    setScoreModalVisible(false);
+
+    if (!nav) {
+      navigation.goBack();
+      return;
+    }
+
+    navigation.navigate('Review', {
+      sessionId: nav.sessionId,
+      reviewCards: nav.reviewCards,
+    });
+  };
+
+  // ✅ 회화 종료(수동/자동)
+  const handleEndChat = async (opts?: { auto?: boolean }) => {
+    const isAuto = opts?.auto === true;
+
+    if (endedRef.current) return;
+    endedRef.current = true;
+
+    console.log('🔥 handleEndChat', { isAuto });
+
+    // ✅ 타이머 중지
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    // ✅ 녹음/재생 정리
+    if (isRecording) {
+      try {
+        setIsRecording(false);
+        await AudioRecord.stop();
+      } catch {}
+    }
+    stopSoundIfAny();
+
+    // ReviewCards 생성
+    const reviewCards = messages
+      .filter(m => m.role === 'user' && m.feedback)
+      .map(m => {
+        const corrected = extractCorrectedSentence(m.feedback);
+        const explanation = extractExplanation(m.feedback);
+        if (!corrected && !explanation) return null;
+        return {
+          corrected: corrected || m.content,
+          explanation: explanation || '',
+        };
+      })
+      .filter((c): c is { corrected: string; explanation: string } => c !== null);
+
+    // ✅ (프론트만) 로컬 통계 업데이트
+    try {
+      const durationMsLocal =
+        sessionStartMs != null ? Math.max(0, Date.now() - sessionStartMs) : 0;
+      const addMinutes = Math.max(1, Math.ceil(durationMsLocal / 60000));
+
+      const prevMinutes = Number(
+        (await AsyncStorage.getItem(STATS_KEYS.totalMinutes)) ?? '0',
+      );
+      await AsyncStorage.setItem(
+        STATS_KEYS.totalMinutes,
+        String(prevMinutes + addMinutes),
+      );
+
+      const todayKey = ymdLocal(new Date());
+      const lastKey = await AsyncStorage.getItem(STATS_KEYS.lastStudyDate);
+      const prevStreak = Number((await AsyncStorage.getItem(STATS_KEYS.streak)) ?? '0');
+
+      let newStreak = prevStreak;
+      if (!lastKey) newStreak = 1;
+      else if (lastKey === todayKey) newStreak = prevStreak;
+      else if (isYesterday(lastKey, todayKey)) newStreak = prevStreak + 1;
+      else newStreak = 1;
+
+      await AsyncStorage.setItem(STATS_KEYS.streak, String(newStreak));
+      await AsyncStorage.setItem(STATS_KEYS.lastStudyDate, todayKey);
+
+      const rawSet = (await AsyncStorage.getItem(STATS_KEYS.learnedSet)) ?? '[]';
+      const arr: string[] = JSON.parse(rawSet);
+      const learned = new Set(arr);
+
+      const candidates = reviewCards.map(c => normalizeSentence(c.corrected));
+
+      let added = 0;
+      for (const s of candidates) {
+        if (!s) continue;
+        if (!learned.has(s)) {
+          learned.add(s);
+          added += 1;
+        }
+      }
+
+      if (added > 0) {
+        const prevSentences = Number(
+          (await AsyncStorage.getItem(STATS_KEYS.totalSentences)) ?? '0',
+        );
+        await AsyncStorage.setItem(
+          STATS_KEYS.totalSentences,
+          String(prevSentences + added),
+        );
+        await AsyncStorage.setItem(
+          STATS_KEYS.learnedSet,
+          JSON.stringify(Array.from(learned)),
+        );
+      }
+
+      console.log('✅ Local stats updated:', {
+        addMinutes,
+        streak: newStreak,
+        addedSentences: added,
+      });
+    } catch (e) {
+      console.log('❌ Local stats update failed:', e);
+    }
+
+    if (!sessionId) {
+      navigation.navigate('Review', { reviewCards });
+      return;
+    }
+
+    const finishedAtIso = new Date().toISOString();
+    const startedAtIso =
+      serverStartTime ?? (sessionStartMs ? new Date(sessionStartMs).toISOString() : null);
+    const durationMs =
+      sessionStartMs != null ? Math.max(0, Date.now() - sessionStartMs) : undefined;
+
+    const payload = {
+      sessionId,
+      script: messages.map(m => ({
+        from: m.role === 'user' ? 'user' : 'ai',
+        text: m.content,
+      })),
+      durationMs,
+      startedAt: startedAtIso ?? undefined,
+      finishedAt: finishedAtIso,
+    };
+
+    try {
+      const res = await conversationApi.finishSession(payload as any);
+      const resBody = res.data as any;
+      const data = resBody?.data ?? resBody;
+
+      const scoreCandidate =
+        data?.scoreSaved ??
+        data?.score ??
+        resBody?.scoreSaved ??
+        resBody?.score ??
+        data?.conversation?.score ??
+        data?.result?.score;
+
+      const score = Number.isFinite(Number(scoreCandidate)) ? Number(scoreCandidate) : 0;
+
+      openScoreModal({
+        score,
+        isAuto,
+        nav: { sessionId, reviewCards },
+      });
+    } catch (e) {
+      console.error(e);
+      openScoreModal({
+        score: 0,
+        isAuto,
+        nav: { sessionId, reviewCards },
+      });
+    }
+  };
+
+  // ⏱ 2) 1초마다 남은 시간 줄이기 (포커스일 때만)
+  useEffect(() => {
+    if (!isFocused || timeUp) return;
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    timerRef.current = setInterval(() => {
+      setRemainingMs(prev => {
+        if (prev <= 1000) {
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
+
+          setTimeUp(true);
+
+          if (isFocused) {
+            handleEndChat({ auto: true });
+          }
+
+          return 0;
+        }
+        return prev - 1000;
+      });
+    }, 1000);
+
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [isFocused, timeUp]);
+
+  // 스크롤
+  useEffect(() => {
+    if (messages.length > 0) {
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+    }
+  }, [messages]);
+
+  // Feedback Request
+  const handleRequestFeedback = async (messageId: string, content: string) => {
+    setMessages(prev =>
+      prev.map(msg => (msg.id === messageId ? { ...msg, isLoadingExtra: true } : msg)),
+    );
+
+    try {
+      const res = await aiApi.feedback(content);
+
+      if (res.data.success && res.data.data) {
+        const data: any = res.data.data;
+        let feedbackText = '';
+
+        // 너 기존 로직 유지 (AI 서버 응답 형식에 따라 맞춰)
+        if (data.natural === false) {
+          feedbackText =
+            `[Corrected Sentence]: ${data.corrected_en}\n` +
+            `[Explanation]: ${data.reason_ko}`;
+        } else if (data.natural === true) {
+          feedbackText = `${data.message}`;
+        } else {
+          // 혹시 그냥 text 형태면 그대로
+          feedbackText = `${data.text ?? ''}`.trim();
+        }
+
+        setMessages(prev =>
+          prev.map(msg =>
+            msg.id === messageId
+              ? { ...msg, feedback: feedbackText, isLoadingExtra: false }
+              : msg,
+          ),
+        );
+      } else {
+        throw new Error('Invalid AI response');
+      }
+    } catch (err) {
+      Alert.alert('Error', '피드백을 불러오지 못했습니다.');
+      setMessages(prev =>
+        prev.map(msg => (msg.id === messageId ? { ...msg, isLoadingExtra: false } : msg)),
+      );
+    }
+  };
+
+  // 답변 추천
+  const handleRequestSuggestion = async (messageId: string, content: string) => {
+    setMessages(prev =>
+      prev.map(msg => (msg.id === messageId ? { ...msg, isLoadingExtra: true } : msg)),
+    );
+
+    try {
+      const res = await aiApi.exampleReply(content, sessionId);
+      const data: any = res.data?.data ?? res.data;
+      const suggestionText =
+        data?.reply_example ?? data?.text ?? data?.reply ?? data?.message ?? data?.example ?? '';
+
+      if (!suggestionText) throw new Error('Empty suggestion');
+
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === messageId ? { ...msg, suggestion: suggestionText, isLoadingExtra: false } : msg,
+        ),
+      );
+    } catch (err) {
+      Alert.alert('Error', '답변 추천을 불러오지 못했습니다.');
+      setMessages(prev =>
+        prev.map(msg => (msg.id === messageId ? { ...msg, isLoadingExtra: false } : msg)),
+      );
+    }
+  };
+
+  const handleCloseExtra = (messageId: string, type: 'feedback' | 'suggestion') => {
+    setMessages(prev => prev.map(msg => (msg.id === messageId ? { ...msg, [type]: null } : msg)));
+  };
+
+  const handleModeChange = () => {
+    Alert.alert('회화 스타일 선택', '사용할 영어 스타일을 선택하세요.', [
+      { text: '😊 Casual', onPress: () => setMode('casual') },
+      { text: '🎓 Formal', onPress: () => setMode('formal') },
+      { text: '취소', style: 'cancel' },
     ]);
-    const [input, setInput] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
-    const [sessionId, setSessionId] = useState<string | null>(null);
-    const flatListRef = useRef<FlatList>(null);
+  };
 
-    // 1. 세션 시작
-    useEffect(() => {
-        const initSession = async () => {
-            try {
-                const res = await conversationApi.startSession();
-                if (res.data.success && res.data.data) {
-                    setSessionId(res.data.data.sessionId);
-                    console.log('Session Started:', res.data.data.sessionId);
-                }
-            } catch (error) {
-                console.error('Failed to start session:', error);
-                Alert.alert('Error', '대화 세션을 시작할 수 없습니다.');
-            }
+  const handleFormSubmit = async () => {
+    if (timeUp) {
+      Alert.alert(
+        '시간 종료',
+        '10분이 지나 더 이상 메시지를 보낼 수 없습니다.\n자동으로 종료됩니다.',
+      );
+      return;
+    }
+
+    // ✅ 녹음 중이면 전송 막기 (UX)
+    if (isRecording || sttLoading) {
+      Alert.alert('녹음 중', '녹음을 종료한 뒤에 전송할 수 있습니다.');
+      return;
+    }
+
+    if (!input.trim() || isLoading) return;
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: input,
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setIsLoading(true);
+
+    try {
+      const res = await aiApi.chat(userMessage.content);
+      if (res.data.success && res.data.data) {
+        const assistantText = res.data.data.text ?? res.data.data?.message ?? '';
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: assistantText,
         };
-        initSession();
-    }, []);
+        setMessages(prev => [...prev, assistantMessage]);
+      }
+    } catch (error) {
+      console.error(error);
+      Alert.alert('Error', 'Failed to get response.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-    // 스크롤
-    useEffect(() => {
-        if (messages.length > 0) {
-            setTimeout(
-                () => flatListRef.current?.scrollToEnd({ animated: true }),
-                100,
-            );
-        }
-    }, [messages]);
-
-
-    // 문법 피드백
-    const handleRequestFeedback = async (messageId: string, content: string) => {
-        setMessages(prev =>
-            prev.map(msg =>
-                msg.id === messageId ? { ...msg, isLoadingExtra: true } : msg,
-            ),
-        );
-        try {
-            const res = await aiApi.getFeedback(content);
-            if (res.data.success && res.data.data) {
-                const { meaning, examples } = res.data.data;
-                const feedbackText = `[Meaning]: ${meaning}\n[Examples]:\n${examples.join('\n')}`;
-
-                setMessages(prev =>
-                    prev.map(msg =>
-                        msg.id === messageId
-                            ? { ...msg, feedback: feedbackText, isLoadingExtra: false }
-                            : msg,
-                    ),
-                );
-            }
-        } catch {
-            Alert.alert('Error', '피드백을 불러오지 못했습니다.');
-            setMessages(prev =>
-                prev.map(msg =>
-                    msg.id === messageId ? { ...msg, isLoadingExtra: false } : msg,
-                ),
-            );
-        }
-    };
-
-    // 답변 추천 (API 미지원으로 임시 비활성화 or 추후 구현)
-    const handleRequestSuggestion = async (messageId: string, content: string) => {
-        Alert.alert('Info', '답변 추천 기능은 준비 중입니다.');
-        // API 명세에 답변 추천이 없으므로 일단 pass
-    };
-
-    const handleCloseExtra = (
-        messageId: string,
-        type: 'feedback' | 'suggestion',
-    ) => {
-        setMessages(prev =>
-            prev.map(msg =>
-                msg.id === messageId ? { ...msg, [type]: null } : msg,
-            ),
-        );
-    };
-
-    const handleModeChange = () => {
-        Alert.alert('회화 스타일 선택', '사용할 영어 스타일을 선택하세요.', [
-            { text: '😊 Casual', onPress: () => setMode('casual') },
-            { text: '🎩 Formal', onPress: () => setMode('formal') },
-            { text: '취소', style: 'cancel' },
-        ]);
-    };
-
-    const handleEndChat = async () => {
-        if (!sessionId) {
-            navigation.navigate('Review');
-            return;
-        }
-
-        try {
-            // 메시지 포맷 변환
-            const script: ChatMessage[] = messages.map(m => ({
-                from: m.role === 'user' ? 'user' : 'ai',
-                text: m.content,
-            }));
-
-            await conversationApi.finishSession({ sessionId, script });
-            Alert.alert('저장 완료', '대화 내용이 저장되었습니다.', [
-                { text: '확인', onPress: () => navigation.navigate('Review') }
-            ]);
-        } catch (error) {
-            console.error('Failed to save session:', error);
-            Alert.alert('Error', '대화 내용을 저장하지 못했습니다.');
-            navigation.navigate('Review');
-        }
-    };
-
-    const handleFormSubmit = async () => {
-        if (!input.trim() || isLoading) return;
-
-        const userMessage: Message = {
-            id: Date.now().toString(),
-            role: 'user',
-            content: input,
-        };
-        setMessages(prev => [...prev, userMessage]);
-        setInput('');
-        setIsLoading(true);
-
-        try {
-            // AI 채팅 요청
-            const res = await aiApi.chat(input);
-            if (res.data.success && res.data.data) {
-                const assistantMessage: Message = {
-                    id: (Date.now() + 1).toString(),
-                    role: 'assistant',
-                    content: res.data.data.text,
-                };
-                setMessages(prev => [...prev, assistantMessage]);
-            }
-        } catch (error) {
-            console.error(error);
-            Alert.alert('Error', 'Failed to get response.');
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    const renderItem = ({ item }: { item: Message }) => {
-        const isUser = item.role === 'user';
-
-        return (
-            <View style={{ marginBottom: 16 }}>
-                <View
-                    style={[
-                        styles.messageRow,
-                        isUser ? styles.userRow : styles.assistantRow,
-                    ]}
-                >
-                    {!isUser && (
-                        <TouchableOpacity
-                            onPress={() =>
-                                item.suggestion
-                                    ? handleCloseExtra(item.id, 'suggestion')
-                                    : handleRequestSuggestion(item.id, item.content)
-                            }
-                            style={styles.actionIconBtn}
-                            disabled={item.isLoadingExtra}
-                        >
-                            {item.isLoadingExtra ? (
-                                <ActivityIndicator size="small" color="#F59E0B" />
-                            ) : (
-                                <Lightbulb
-                                    color="#F59E0B"
-                                    size={20}
-                                    fill={item.suggestion ? '#F59E0B' : 'none'}
-                                />
-                            )}
-                        </TouchableOpacity>
-                    )}
-
-                    <View
-                        style={[
-                            styles.bubble,
-                            isUser ? styles.userBubble : styles.assistantBubble,
-                        ]}
-                    >
-                        <Text style={styles.messageText}>{item.content}</Text>
-                    </View>
-
-                    {isUser && (
-                        <TouchableOpacity
-                            onPress={() =>
-                                item.feedback
-                                    ? handleCloseExtra(item.id, 'feedback')
-                                    : handleRequestFeedback(item.id, item.content)
-                            }
-                            style={styles.actionIconBtn}
-                            disabled={item.isLoadingExtra}
-                        >
-                            {item.isLoadingExtra ? (
-                                <ActivityIndicator size="small" color="#6B7280" />
-                            ) : (
-                                <Eye color="#6B7280" size={20} />
-                            )}
-                        </TouchableOpacity>
-                    )}
-                </View>
-
-                {isUser && item.feedback && (
-                    <View style={styles.feedbackContainer}>
-                        <View style={styles.feedbackHeader}>
-                            <Text style={styles.feedbackTitle}>🧐 피드백 (Grammar Check)</Text>
-                            <TouchableOpacity
-                                onPress={() => handleCloseExtra(item.id, 'feedback')}
-                            >
-                                <X size={16} color="#666" />
-                            </TouchableOpacity>
-                        </View>
-                        <Text style={styles.feedbackText}>{item.feedback}</Text>
-                    </View>
-                )}
-
-                {!isUser && item.suggestion && (
-                    <View style={styles.suggestionContainer}>
-                        <View style={styles.feedbackHeader}>
-                            <Text style={styles.suggestionTitle}>💡 이렇게 말할 수 있어요</Text>
-                            <TouchableOpacity
-                                onPress={() => handleCloseExtra(item.id, 'suggestion')}
-                            >
-                                <X size={16} color="#B45309" />
-                            </TouchableOpacity>
-                        </View>
-                        <Text style={styles.suggestionText}>{item.suggestion}</Text>
-                    </View>
-                )}
-            </View>
-        );
-    };
+  const renderItem = ({ item }: { item: Message }) => {
+    const isUser = item.role === 'user';
 
     return (
-        <SafeAreaView
-            style={styles.safeArea}
-            edges={['left', 'right', 'bottom']} // top은 insets.top으로 처리
-        >
-            <View style={styles.container}>
-                {/* 헤더 */}
-                <View style={[styles.header, { paddingTop: insets.top }]}>
-                    <TouchableOpacity
-                        onPress={() => navigation.goBack()}
-                        style={styles.iconButton}
-                    >
-                        <ChevronLeft color="#2c303c" size={24} />
-                    </TouchableOpacity>
-
-                    <View style={styles.headerMiddle}>
-                        <TouchableOpacity onPress={handleEndChat}>
-                            <Text style={styles.endChatText}>회화 종료</Text>
-                        </TouchableOpacity>
-
-                        <Text style={styles.headerTitle}>
-                            {mode === 'casual' ? '😊 Casual Mode' : '🎩 Formal Mode'}
-                        </Text>
-                    </View>
-
-                    <TouchableOpacity onPress={handleModeChange}>
-                        <Text style={styles.modeButtonText}>모드 변경</Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* 메시지 리스트 */}
-                <FlatList
-                    ref={flatListRef}
-                    data={messages}
-                    keyExtractor={item => item.id}
-                    renderItem={renderItem}
-                    // ⬇️ 여기서 insets.top만큼 더 패딩 줘서 "스크롤돼도" 위로 안 붙게 함
-                    contentContainerStyle={[
-                        styles.listContent,
-                        { paddingTop: 16 + insets.top },
-                    ]}
-                    ListHeaderComponent={
-                        <View style={styles.mascotContainer}>
-                            <View style={styles.mascotCircle}>
-                                <PandaIcon size="medium" />
-                            </View>
-                        </View>
-                    }
-                    ListFooterComponent={
-                        isLoading ? (
-                            <View style={styles.loadingContainer}>
-                                <View style={styles.assistantBubble}>
-                                    <ActivityIndicator color="#6b7280" size="small" />
-                                </View>
-                            </View>
-                        ) : null
-                    }
-                    showsVerticalScrollIndicator={false}
+      <View style={{ marginBottom: 16 }}>
+        <View style={[styles.messageRow, isUser ? styles.userRow : styles.assistantRow]}>
+          {!isUser && (
+            <TouchableOpacity
+              onPress={() =>
+                item.suggestion
+                  ? handleCloseExtra(item.id, 'suggestion')
+                  : handleRequestSuggestion(item.id, item.content)
+              }
+              style={styles.actionIconBtn}
+              disabled={item.isLoadingExtra}
+            >
+              {item.isLoadingExtra ? (
+                <ActivityIndicator size="small" color="#F59E0B" />
+              ) : (
+                <Lightbulb
+                  color="#F59E0B"
+                  size={20}
+                  fill={item.suggestion ? '#F59E0B' : 'none'}
                 />
+              )}
+            </TouchableOpacity>
+          )}
 
-                {/* 입력창 */}
-                <KeyboardAvoidingView
-                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                    keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}
-                >
-                    <View style={styles.inputContainer}>
-                        <View style={styles.inputWrapper}>
-                            <TextInput
-                                style={styles.input}
-                                value={input}
-                                onChangeText={setInput}
-                                placeholder="Hello, how are you today?"
-                                placeholderTextColor="#9ca3af"
-                                multiline={false}
-                                onSubmitEditing={handleFormSubmit}
-                                returnKeyType="send"
-                            />
-                            <TouchableOpacity style={styles.micButton}>
-                                <Mic color="#9ca3af" size={20} />
-                            </TouchableOpacity>
-                        </View>
-
-                        <TouchableOpacity
-                            onPress={handleFormSubmit}
-                            disabled={!input.trim() || isLoading}
-                            style={[
-                                styles.sendButton,
-                                (!input.trim() || isLoading) && styles.disabledButton,
-                            ]}
-                        >
-                            <Send color="#fff" size={18} />
-                        </TouchableOpacity>
-                    </View>
-                </KeyboardAvoidingView>
+          {/* ✅ AI 말풍선 탭 => TTS */}
+          {isUser ? (
+            <View style={[styles.bubble, styles.userBubble]}>
+              <Text style={styles.messageText}>{item.content}</Text>
             </View>
-        </SafeAreaView>
+          ) : (
+            <TouchableOpacity
+              activeOpacity={0.75}
+              onPress={() => speakViaBackendTTS(item.content)}
+              style={[styles.bubble, styles.assistantBubble]}
+              disabled={ttsLoading || isRecording || sttLoading}
+            >
+              <Text style={styles.messageText}>{item.content}</Text>
+              <Text style={{ fontSize: 11, marginTop: 6, color: '#6B7280' }}>
+                {ttsLoading ? '🔊 재생 준비/재생 중...' : '🔊 탭해서 듣기'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {isUser && (
+            <TouchableOpacity
+              onPress={() =>
+                item.feedback
+                  ? handleCloseExtra(item.id, 'feedback')
+                  : handleRequestFeedback(item.id, item.content)
+              }
+              style={styles.actionIconBtn}
+              disabled={item.isLoadingExtra}
+            >
+              {item.isLoadingExtra ? (
+                <ActivityIndicator size="small" color="#6B7280" />
+              ) : (
+                <Eye color="#6B7280" size={20} />
+              )}
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {isUser && item.feedback && (
+          <View style={styles.feedbackContainer}>
+            <View style={styles.feedbackHeader}>
+              <Text style={styles.feedbackTitle}>🧐 피드백 (Grammar Check)</Text>
+              <TouchableOpacity onPress={() => handleCloseExtra(item.id, 'feedback')}>
+                <X size={16} color="#666" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.feedbackText}>{item.feedback}</Text>
+          </View>
+        )}
+
+        {!isUser && item.suggestion && (
+          <View style={styles.suggestionContainer}>
+            <View style={styles.feedbackHeader}>
+              <Text style={styles.suggestionTitle}>💡 이렇게 말할 수 있어요</Text>
+              <TouchableOpacity onPress={() => handleCloseExtra(item.id, 'suggestion')}>
+                <X size={16} color="#B45309" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.suggestionText}>{item.suggestion}</Text>
+          </View>
+        )}
+      </View>
     );
+  };
+
+  const sendDisabled = !input.trim() || isLoading || timeUp || isRecording || sttLoading;
+
+  return (
+    <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
+      <View style={styles.container}>
+        {/* ✅ 점수 모달 */}
+        <Modal
+          transparent
+          visible={scoreModalVisible}
+          animationType="fade"
+          onRequestClose={() => {}}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>
+                {endWasAuto ? '⏱ 회화 시간 종료' : '회화 종료'}
+              </Text>
+              <Text style={styles.modalScoreValue}>{latestScore}점</Text>
+              <Pressable style={styles.modalBtn} onPress={handleScoreConfirm}>
+                <Text style={styles.modalBtnText}>확인</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        {/* 헤더 */}
+        <View style={[styles.header, { paddingTop: insets.top }]}>
+          <TouchableOpacity onPress={() => handleEndChat({ auto: false })} style={styles.iconButton}>
+            <Text style={styles.endChatText}>회화 종료</Text>
+          </TouchableOpacity>
+
+          <View style={styles.headerMiddle}>
+            <Text style={styles.headerTitle}>
+              {mode === 'casual' ? 'Casual Mode' : 'Formal Mode'}
+            </Text>
+          </View>
+
+          <TouchableOpacity onPress={handleModeChange}>
+            <Text style={styles.modeButtonText}>모드 변경</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* 타이머 표시 */}
+        <View style={{ alignItems: 'center', paddingVertical: 4 }}>
+          <Text style={{ fontSize: 14, color: timeUp ? '#ef4444' : '#374151' }}>
+            ⏱ 남은 시간: {formatTime(remainingMs)}
+          </Text>
+        </View>
+
+        {/* 메시지 리스트 */}
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          keyExtractor={item => item.id}
+          renderItem={renderItem}
+          contentContainerStyle={[styles.listContent, { paddingTop: 8 + insets.top }]}
+          ListHeaderComponent={
+            <View style={styles.mascotContainer}>
+              <View style={styles.mascotCircle}>
+                <PandaIcon size="medium" />
+              </View>
+            </View>
+          }
+          ListFooterComponent={
+            isLoading ? (
+              <View style={styles.loadingContainer}>
+                <View style={styles.assistantBubble}>
+                  <ActivityIndicator color="#6b7280" size="small" />
+                </View>
+              </View>
+            ) : null
+          }
+          showsVerticalScrollIndicator={false}
+        />
+
+        {/* 입력창 */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}
+        >
+          <View style={styles.inputContainer}>
+            <View style={styles.inputWrapper}>
+              <TextInput
+                style={styles.input}
+                value={input}
+                onChangeText={setInput}
+                placeholder="Hello, how are you today?"
+                placeholderTextColor="#9ca3af"
+                multiline={false}
+                onSubmitEditing={() => {
+                  // ✅ 엔터 전송도 녹음 중엔 막기
+                  if (isRecording || sttLoading) return;
+                  handleFormSubmit();
+                }}
+                returnKeyType="send"
+                editable={!timeUp && !sttLoading}
+              />
+
+              {/* ✅ STT 토글 버튼 */}
+              <TouchableOpacity
+                style={styles.micButton}
+                onPress={toggleRecording}
+                disabled={timeUp || sttLoading}
+              >
+                {sttLoading ? (
+                  <ActivityIndicator size="small" color="#ef4444" />
+                ) : (
+                  <Mic color={isRecording ? '#ef4444' : '#9ca3af'} size={20} />
+                )}
+              </TouchableOpacity>
+            </View>
+
+            {/* ✅ 녹음 중에는 보내기 비활성화 */}
+            <TouchableOpacity
+              onPress={handleFormSubmit}
+              disabled={sendDisabled}
+              style={[
+                styles.sendButton,
+                sendDisabled && styles.disabledButton,
+              ]}
+            >
+              <Send color="#fff" size={18} />
+            </TouchableOpacity>
+          </View>
+
+          {/* 상태 안내 */}
+          {(isRecording || sttLoading || ttsLoading) && (
+            <View style={{ alignItems: 'center', paddingBottom: 10 }}>
+              {isRecording && (
+                <Text style={{ fontSize: 12, color: '#ef4444' }}>
+                  🎙️ 녹음 중…
+                </Text>
+              )}
+              {sttLoading && (
+                <Text style={{ fontSize: 12, color: '#6b7280' }}>
+                  🧠 음성 인식 중…
+                </Text>
+              )}
+              {ttsLoading && (
+                <Text style={{ fontSize: 12, color: '#6b7280' }}>
+                  🔊 음성 생성/재생 중…
+                </Text>
+              )}
+            </View>
+          )}
+        </KeyboardAvoidingView>
+      </View>
+    </SafeAreaView>
+  );
 }
 
 const styles = StyleSheet.create({
-    safeArea: {
-        flex: 1,
-        backgroundColor: '#e8eaf0',
-    },
-    container: {
-        flex: 1,
-        backgroundColor: '#e8eaf0',
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingBottom: 8,
-        backgroundColor: '#d5d8e0',
-        borderBottomWidth: 1,
-        borderBottomColor: '#c5c8d4',
-    },
-    headerMiddle: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        columnGap: 12, // 안 되면 대신 marginRight / marginLeft 써도 됨
-    },
-    headerTitle: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#2c303c',
-    },
-    endChatText: {
-        fontSize: 12,
-        color: '#2c303c',
-        textDecorationLine: 'underline',
-    },
-    iconButton: { padding: 4 },
-    modeButtonText: {
-        fontSize: 12,
-        color: '#2c303c',
-        textDecorationLine: 'underline',
-    },
+  safeArea: { flex: 1, backgroundColor: '#e8eaf0' },
+  container: { flex: 1, backgroundColor: '#e8eaf0' },
 
-    listContent: {
-        paddingHorizontal: 16,
-        paddingBottom: 20,
-    },
-    mascotContainer: { alignItems: 'center', marginVertical: 16 },
-    mascotCircle: {
-        width: 128,
-        height: 128,
-        backgroundColor: 'white',
-        borderRadius: 64,
-        borderWidth: 4,
-        borderColor: '#2c303c',
-        justifyContent: 'center',
-        alignItems: 'center',
-        overflow: 'hidden',
-    },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    backgroundColor: '#d5d8e0',
+    borderBottomWidth: 1,
+    borderBottomColor: '#c5c8d4',
+  },
+  headerMiddle: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    columnGap: 12,
+  },
+  headerTitle: { fontSize: 16, fontWeight: '600', color: '#2c303c' },
+  endChatText: { fontSize: 12, color: '#2c303c', textDecorationLine: 'underline' },
+  iconButton: { padding: 4 },
+  modeButtonText: { fontSize: 12, color: '#2c303c', textDecorationLine: 'underline' },
 
-    messageRow: {
-        marginBottom: 4,
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-    },
-    userRow: { justifyContent: 'flex-end' },
-    assistantRow: { justifyContent: 'flex-start' },
+  listContent: { paddingHorizontal: 16, paddingBottom: 20 },
+  mascotContainer: { alignItems: 'center', marginVertical: 16 },
+  mascotCircle: {
+    width: 128,
+    height: 128,
+    backgroundColor: 'white',
+    borderRadius: 64,
+    borderWidth: 4,
+    borderColor: '#2c303c',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
 
-    bubble: { maxWidth: '70%', padding: 12, borderRadius: 16 },
-    userBubble: { backgroundColor: '#b8bcc9', borderBottomRightRadius: 4 },
-    assistantBubble: { backgroundColor: '#d5d8e0', borderBottomLeftRadius: 4 },
-    messageText: { color: '#2c303c', fontSize: 14, lineHeight: 20 },
+  messageRow: { marginBottom: 4, flexDirection: 'row', alignItems: 'flex-end' },
+  userRow: { justifyContent: 'flex-end' },
+  assistantRow: { justifyContent: 'flex-start' },
 
-    loadingContainer: { alignItems: 'flex-start', marginBottom: 10 },
+  bubble: { maxWidth: '70%', padding: 12, borderRadius: 16 },
+  userBubble: { backgroundColor: '#b8bcc9', borderBottomRightRadius: 4 },
+  assistantBubble: { backgroundColor: '#d5d8e0', borderBottomLeftRadius: 4 },
+  messageText: { color: '#2c303c', fontSize: 14, lineHeight: 20 },
 
-    inputContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 16,
-        backgroundColor: '#d5d8e0',
-        borderTopWidth: 1,
-        borderTopColor: '#c5c8d4',
-    },
-    inputWrapper: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#fff',
-        borderRadius: 24,
-        paddingHorizontal: 16,
-        height: 44,
-        marginRight: 8,
-    },
-    input: { flex: 1, color: '#2c303c', fontSize: 14, padding: 0 },
-    micButton: { padding: 4 },
-    sendButton: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: '#2c303c',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    disabledButton: { opacity: 0.5 },
+  loadingContainer: { alignItems: 'flex-start', marginBottom: 10 },
 
-    actionIconBtn: {
-        padding: 8,
-        marginHorizontal: 4,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#d5d8e0',
+    borderTopWidth: 1,
+    borderTopColor: '#c5c8d4',
+  },
+  inputWrapper: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    paddingHorizontal: 16,
+    height: 44,
+    marginRight: 8,
+  },
+  input: { flex: 1, color: '#2c303c', fontSize: 14, padding: 0 },
+  micButton: { padding: 4 },
+  sendButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#2c303c',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  disabledButton: { opacity: 0.5 },
 
-    feedbackContainer: {
-        alignSelf: 'flex-end',
-        backgroundColor: '#F3F4F6',
-        width: '85%',
-        padding: 12,
-        borderRadius: 12,
-        marginTop: 4,
-        marginRight: 10,
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-    },
-    feedbackHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 6,
-    },
-    feedbackTitle: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: '#4B5563',
-    },
-    feedbackText: {
-        fontSize: 13,
-        color: '#374151',
-        lineHeight: 18,
-    },
+  actionIconBtn: {
+    padding: 8,
+    marginHorizontal: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
 
-    suggestionContainer: {
-        alignSelf: 'flex-start',
-        backgroundColor: '#FFFBEB',
-        width: '85%',
-        padding: 12,
-        borderRadius: 12,
-        marginTop: 4,
-        marginLeft: 10,
-        borderWidth: 1,
-        borderColor: '#FCD34D',
-    },
-    suggestionTitle: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: '#B45309',
-    },
-    suggestionText: {
-        fontSize: 13,
-        color: '#92400E',
-        lineHeight: 18,
-    },
+  feedbackContainer: {
+    alignSelf: 'flex-end',
+    backgroundColor: '#F3F4F6',
+    width: '85%',
+    padding: 12,
+    borderRadius: 12,
+    marginTop: 4,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  feedbackHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  feedbackTitle: { fontSize: 12, fontWeight: '700', color: '#4B5563' },
+  feedbackText: { fontSize: 13, color: '#374151', lineHeight: 18 },
+
+  suggestionContainer: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#FFFBEB',
+    width: '85%',
+    padding: 12,
+    borderRadius: 12,
+    marginTop: 4,
+    marginLeft: 10,
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+  },
+  suggestionTitle: { fontSize: 12, fontWeight: '700', color: '#B45309' },
+  suggestionText: { fontSize: 13, color: '#92400E', lineHeight: 18 },
+
+  // ✅ 모달 스타일
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 20,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 14,
+  },
+  modalScoreValue: {
+    fontSize: 34,
+    fontWeight: '900',
+    color: '#111827',
+    marginBottom: 18,
+  },
+  modalBtn: {
+    width: '100%',
+    borderRadius: 14,
+    paddingVertical: 12,
+    backgroundColor: '#2c303c',
+    alignItems: 'center',
+  },
+  modalBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
 });

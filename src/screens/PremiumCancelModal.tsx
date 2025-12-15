@@ -1,13 +1,27 @@
 // src/screens/PremiumCancelModal.tsx
 
 import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Linking, Platform } from 'react-native';
 
 type Props = {
   navigation: any;
 };
 
 export default function PremiumCancelModal({ navigation }: Props) {
+  const openSubscriptionManagement = () => {
+    if (Platform.OS === 'android') {
+      // 🔥 구글 플레이 구독 관리 페이지 열기
+      Linking.openURL(
+        'https://play.google.com/store/account/subscriptions'
+      );
+    } else {
+      // iOS
+      Linking.openURL('https://apps.apple.com/account/subscriptions');
+    }
+
+    navigation.goBack(); // 팝업 닫기
+  };
+
   return (
     <View style={styles.overlay}>
       <View style={styles.modalBox}>
@@ -22,7 +36,6 @@ export default function PremiumCancelModal({ navigation }: Props) {
           구독을 취소하시겠습니까?
         </Text>
 
-        {/* 버튼 영역 */}
         <View style={styles.buttonRow}>
           <Pressable
             style={styles.buttonLeft}
@@ -33,7 +46,7 @@ export default function PremiumCancelModal({ navigation }: Props) {
 
           <Pressable
             style={styles.buttonRight}
-            onPress={() => navigation.navigate('Subscription')}
+            onPress={openSubscriptionManagement}
           >
             <Text style={styles.buttonText}>확인</Text>
           </Pressable>

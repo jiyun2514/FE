@@ -1,13 +1,36 @@
 // src/screens/PremiumSubscribeModal.tsx
 
 import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  Alert,
+} from 'react-native';
 
 type Props = {
   navigation: any;
 };
 
 export default function PremiumSubscribeModal({ navigation }: Props) {
+  const handleSubscribe = async () => {
+    // 🔧 임시 구현: 실제 인앱결제 대신 안내만
+    Alert.alert(
+      '준비 중',
+      '현재 프리미엄 결제 기능은 준비 중입니다.\n테스트용으로만 동작합니다.',
+      [
+        {
+          text: '확인',
+          onPress: () => {
+            // 일단은 구독된 것처럼 처리하고 화면 이동만
+            navigation.navigate('Subscription');
+          },
+        },
+      ],
+    );
+  };
+
   return (
     <View style={styles.overlay}>
       <View style={styles.modalBox}>
@@ -15,12 +38,11 @@ export default function PremiumSubscribeModal({ navigation }: Props) {
 
         <Text style={styles.message}>
           프리미엄 회원 구독 시 회화 시간 및 회화 횟수 제한이 사라집니다.
-          {"\n"}
-          {"\n"}
+          {'\n'}
+          {'\n'}
           구독하시겠습니까?
         </Text>
 
-        {/* 버튼 영역 */}
         <View style={styles.buttonRow}>
           <Pressable
             style={styles.buttonLeft}
@@ -31,11 +53,7 @@ export default function PremiumSubscribeModal({ navigation }: Props) {
 
           <Pressable
             style={styles.buttonRight}
-            onPress={() => {
-              console.log('[RN] 프리미엄 구독 확인');
-              // TODO: 실제 구독 처리 로직
-              navigation.navigate('Subscription');
-            }}
+            onPress={handleSubscribe}
           >
             <Text style={styles.buttonText}>확인</Text>
           </Pressable>

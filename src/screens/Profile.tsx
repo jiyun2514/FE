@@ -1,4 +1,6 @@
-import React from 'react';
+// src/screens/ProfileScreen.tsx
+
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,31 +11,120 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChevronLeft } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import PandaIcon from '../components/PandaIcon';
+import { statsApi } from '../api/stats'; // ✅ client 사용 + /api/stats로 맞춘 statsApi
+import { useFocusEffect } from '@react-navigation/native';
 
 type Props = {
   navigation: any;
 };
 
-// src/screens → src/assets
+type StatsData = {
+  totalSessions: number;
+  totalMinutes: number;
+  avgScore: number;
+  bestScore: number;
+  streak: number;
+  newWordsLearned: number;
+};
+
 const pandaImg = require('../assets/images/panda-mascot.png');
 
 export default function ProfileScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
 
+  const [userName, setUserName] = useState<string>('사용자');
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
+
+  const [stats, setStats] = useState<StatsData | null>(null);
+  const [loadingStats, setLoadingStats] = useState(true);
+
+  // ✅ 응답 구조가 달라도 최대한 Stats payload를 뽑아내기
+  const extractStatsPayload = (raw: any) => {
+    return raw?.data?.data ?? raw?.data ?? raw?.stats ?? raw;
+  };
+
+  // ✅ 프로필 로드
+  const loadProfile = useCallback(async () => {
+    try {
+      const storedName = await AsyncStorage.getItem('userName');
+      const storedAvatar = await AsyncStorage.getItem('userAvatarUri');
+
+      if (storedName) setUserName(storedName);
+      if (storedAvatar) setAvatarUri(storedAvatar);
+    } catch (e) {
+      console.log('[Profile] 프로필 불러오기 실패:', e);
+    }
+  }, []);
+
+  // ✅ 통계 로드 (핵심: /stats ❌, /api/stats ✅)
+  const fetchStats = useCallback(async () => {
+    setLoadingStats(true);
+
+    try {
+      const res = await statsApi.getStats();
+
+      console.log('[Profile] /api/stats 원본 응답:', JSON.stringify(res.data, null, 2));
+
+      const payload = extractStatsPayload(res.data);
+
+      console.log('[Profile] /api/stats payload:', JSON.stringify(payload, null, 2));
+
+      setStats({
+        totalSessions: payload?.totalSessions ?? 0,
+        totalMinutes: payload?.totalMinutes ?? 0,
+        avgScore: payload?.avgScore ?? 0,
+        bestScore: payload?.bestScore ?? 0,
+        streak: payload?.streak ?? 0,
+        newWordsLearned: payload?.newWordsLearned ?? 0,
+      });
+    } catch (e: any) {
+      console.log('[Profile] /api/stats 호출 실패:', e?.response?.status, e?.response?.data, e?.message);
+
+      setStats({
+        totalSessions: 0,
+        totalMinutes: 0,
+        avgScore: 0,
+        bestScore: 0,
+        streak: 0,
+        newWordsLearned: 0,
+      });
+    } finally {
+      setLoadingStats(false);
+    }
+  }, []);
+
+  // ✅ 처음 한 번
+  useEffect(() => {
+    loadProfile();
+  }, [loadProfile]);
+
+  // ✅ 화면 들어올 때마다(포커스) 프로필+통계 둘 다 갱신
+  useFocusEffect(
+    useCallback(() => {
+      loadProfile();
+      fetchStats();
+    }, [loadProfile, fetchStats]),
+  );
+
+  // ✅ 포인트 계산: 3회마다 팬더 1개, 팬더 1개=10점
+  const getTotalPoints = () => {
+    if (!stats) return 0;
+    const pandaCount = Math.floor(stats.totalSessions / 3);
+    return pandaCount * 10;
+  };
+
+  const streakValue = stats ? stats.streak : 0;
+  const pointsValue = stats ? getTotalPoints() : 0;
+
   return (
-    <SafeAreaView
-      style={styles.safeArea}
-      edges={['left', 'right', 'bottom']} // top은 insets.top으로 직접 처리
-    >
+    <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
       <View style={[styles.root, { paddingTop: insets.top }]}>
-        {/* Header */}
+        {/* === 헤더 === */}
         <View style={styles.header}>
           <View style={styles.headerRow}>
-            <Pressable
-              style={styles.backButton}
-              onPress={() => navigation.goBack()}
-            >
+            <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
               <ChevronLeft color="#2c303c" size={24} />
             </Pressable>
 
@@ -51,9 +142,8 @@ export default function ProfileScreen({ navigation }: Props) {
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
-          {/* Profile Card */}
+          {/* 프로필 카드 */}
           <View style={styles.card}>
-            {/* "프로필" 타이틀 + 아이콘 */}
             <View style={styles.cardHeaderRow}>
               <View style={styles.cardHeaderTitleRow}>
                 <Text style={styles.cardHeaderIcon}>👤</Text>
@@ -61,15 +151,16 @@ export default function ProfileScreen({ navigation }: Props) {
               </View>
             </View>
 
-            {/* 실제 프로필 내용 */}
             <View style={styles.profileRow}>
               <View style={styles.profileAvatarWrapper}>
-                <Image source={pandaImg} style={styles.profileAvatar} />
+                <Image
+                  source={avatarUri ? { uri: avatarUri } : pandaImg}
+                  style={styles.profileAvatar}
+                />
               </View>
 
               <View style={styles.profileInfo}>
-                <Text style={styles.profileName}>김말본</Text>
-                <Text style={styles.profileEmail}>kmm@gmail.com</Text>
+                <Text style={styles.profileName}>{userName}</Text>
                 <View style={styles.profilePlanRow}>
                   <View style={styles.planDot} />
                   <Text style={styles.profilePlanText}>베이직</Text>
@@ -78,56 +169,41 @@ export default function ProfileScreen({ navigation }: Props) {
 
               <Pressable
                 style={styles.settingsButton}
-                onPress={() => {
-                  console.log('[RN] 설정 버튼 클릭');
-                  navigation.navigate('Settings');
-                }}
+                onPress={() => navigation.navigate('Settings')}
               >
                 <Text style={styles.settingsButtonText}>설정</Text>
               </Pressable>
             </View>
           </View>
 
-          {/* Stats Cards */}
+          {/* 통계 카드 */}
           <View style={styles.statCard}>
             <Text style={styles.statIcon}>📆</Text>
             <Text style={styles.statLabel}>연속 학습일</Text>
-            <Text style={styles.statValue}>15</Text>
+            <Text style={styles.statValue}>{loadingStats ? '-' : streakValue}</Text>
           </View>
 
           <View style={styles.statCard}>
             <Text style={styles.statIcon}>⭐</Text>
             <Text style={styles.statLabel}>획득 포인트</Text>
-            <Text style={styles.statValue}>1250</Text>
+            <Text style={styles.statValue}>{loadingStats ? '-' : pointsValue}</Text>
           </View>
 
-          {/* Menu Items */}
-          <Pressable
-            style={styles.menuItem}
-            onPress={() => {
-              console.log('[RN] 학습 통계 클릭');
-              navigation.navigate('StudyStats');
-            }}
-          >
+          {/* 메뉴들 */}
+          <Pressable style={styles.menuItem} onPress={() => navigation.navigate('StudyStats')}>
             <Text style={styles.menuIcon}>📊</Text>
             <Text style={styles.menuLabel}>학습 통계</Text>
           </Pressable>
 
-          <Pressable
-            style={styles.menuItem}
-            onPress={() => {
-              console.log('[RN] 회화 스크립트 클릭');
-              navigation.navigate('ChatHistory');
-            }}
-          >
+          <Pressable style={styles.menuItem} onPress={() => navigation.navigate('ReviewHistory')}>
+            <Text style={styles.menuIcon}>🗂️</Text>
+            <Text style={styles.menuLabel}>복습 카드</Text>
+          </Pressable>
+
+          <Pressable style={styles.menuItem} onPress={() => navigation.navigate('ChatHistory')}>
             <Text style={styles.menuIcon}>💬</Text>
             <Text style={styles.menuLabel}>회화 스크립트</Text>
           </Pressable>
-
-          {/* Panda at bottom */}
-          <View style={styles.bottomPandaWrapper}>
-            <Image source={pandaImg} style={styles.bottomPanda} />
-          </View>
         </ScrollView>
       </View>
     </SafeAreaView>

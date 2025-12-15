@@ -10,18 +10,25 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { ChevronLeft } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { conversationApi } from '../api/Services';
 
-// ChatScreen과 동일한 타입 정의 (저장된 데이터 구조)
-type ChatMessage = {
+// ChatScreen과 동일한 타입 정의 (로컬 저장 구조)
+type LocalChatMessage = {
   id: string;
-  role: 'user' | 'assistant' | 'model'; // model은 gemini role
+  role: 'user' | 'assistant' | 'model';
   content: string;
 };
 
-// 화면에 표시할 포맷 (변환 후)
+// 백엔드 스크립트 구조
+type ServerScriptMessage = {
+  from: 'user' | 'ai';
+  text: string;
+};
+
+// 화면에 표시할 포맷
 type DisplayMessage = {
   id: string;
   role: 'user' | 'assistant';
@@ -31,39 +38,76 @@ type DisplayMessage = {
 
 export default function ScriptScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
   const insets = useSafeAreaInsets();
+
+  const sessionId = route.params?.sessionId;
 
   const [scriptData, setScriptData] = useState<DisplayMessage[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const loadChatHistory = async () => {
-      try {
-        const jsonValue = await AsyncStorage.getItem('last_chat_history');
+  console.log("ScriptScreen sessionId:", sessionId);
 
-        if (jsonValue != null) {
-          const parsedData: ChatMessage[] = JSON.parse(jsonValue);
+  // ====== 1. 서버에서 스크립트 불러오기 ======
+  const loadFromServer = async (sid: string) => {
+    try {
+      setLoading(true);
+      const res: any = await conversationApi.getConversation(sid);
+      // res: { success: true, data: { sessionId, script: [...] } }
+      const script: ServerScriptMessage[] = res?.data?.data?.script ?? [];
 
-          const formattedData: DisplayMessage[] = parsedData.map((msg) => ({
-            id: msg.id,
-            role: msg.role === 'user' ? 'user' : 'assistant', // model -> assistant 통합
-            name: msg.role === 'user' ? 'Me' : 'Brainbox',
-            text: msg.content,
-          }));
+      const formatted: DisplayMessage[] = script.map((msg, idx) => ({
+        id: `${sid}-${idx}`,
+        role: msg.from === 'user' ? 'user' : 'assistant',
+        name: msg.from === 'user' ? 'Me' : 'Brainbox',
+        text: msg.text,
+      }));
 
-          setScriptData(formattedData);
-        } else {
-          console.log('저장된 대화가 없습니다.');
-        }
-      } catch (e) {
-        console.error('데이터 불러오기 실패', e);
-      } finally {
-        setLoading(false);
+      setScriptData(formatted);
+    } catch (e) {
+      console.log('loadFromServer error', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ====== 2. 로컬 AsyncStorage에서 불러오기 (fallback) ======
+  const loadFromLocal = async () => {
+    try {
+      setLoading(true);
+      const jsonValue = await AsyncStorage.getItem('last_chat_history');
+
+      if (jsonValue != null) {
+        const parsedData: LocalChatMessage[] = JSON.parse(jsonValue);
+
+        const formattedData: DisplayMessage[] = parsedData.map(msg => ({
+          id: msg.id,
+          role: msg.role === 'user' ? 'user' : 'assistant', // model -> assistant
+          name: msg.role === 'user' ? 'Me' : 'Brainbox',
+          text: msg.content,
+        }));
+
+        setScriptData(formattedData);
+      } else {
+        console.log('로컬에 저장된 대화가 없습니다.');
       }
-    };
+    } catch (e) {
+      console.error('로컬 데이터 불러오기 실패', e);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    loadChatHistory();
-  }, []);
+  // ====== 3. 마운트 시 데이터 로드 ======
+  useEffect(() => {
+    if (sessionId) {
+      // ChatHistory에서 들어온 경우 → 서버에서 해당 세션 스크립트 조회
+      loadFromServer(sessionId);
+    } else {
+      // 예전처럼 마지막 대화 로컬 버전 보기
+      loadFromLocal();
+    }
+  }, [sessionId]);
 
   const renderItem = ({ item }: { item: DisplayMessage }) => {
     const isUser = item.role === 'user';
@@ -99,7 +143,7 @@ export default function ScriptScreen() {
     return (
       <SafeAreaView
         style={styles.safeArea}
-        edges={['left', 'right', 'bottom']} // top은 insets.top으로 처리
+        edges={['left', 'right', 'bottom']}
       >
         <View
           style={[
@@ -116,7 +160,7 @@ export default function ScriptScreen() {
   return (
     <SafeAreaView
       style={styles.safeArea}
-      edges={['left', 'right', 'bottom']} // top은 insets.top으로 처리
+      edges={['left', 'right', 'bottom']}
     >
       <View style={[styles.root, { paddingTop: insets.top }]}>
         <View style={styles.gradientBg} />
@@ -142,7 +186,7 @@ export default function ScriptScreen() {
           <FlatList
             data={scriptData}
             renderItem={renderItem}
-            keyExtractor={(item) => item.id}
+            keyExtractor={item => item.id}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
           />

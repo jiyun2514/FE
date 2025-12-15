@@ -78,13 +78,22 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "com.lingomateapp"
+
     defaultConfig {
         applicationId "com.lingomateapp"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+
+        manifestPlaceholders = [
+            usesCleartextTraffic: "true",
+            auth0Domain : "dev-rc5gsyjk5pfptk72.us.auth0.com",
+            auth0Scheme : "com.lingomateapp.auth0"
+        ]
     }
+
+
     signingConfigs {
         debug {
             storeFile file('debug.keystore')
@@ -93,19 +102,19 @@ android {
             keyPassword 'android'
         }
     }
+
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
 }
+
 
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin

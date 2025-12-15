@@ -55,14 +55,33 @@ export interface ChatMessage {
 }
 
 export interface FinishSessionRequest {
-    sessionId: string;
-    script: ChatMessage[];
+  sessionId: string;
+  script: ChatMessage[];
+
+  // ✅ 추가: 서버가 분 계산할 때 쓰게 (없어도 기존 동작 유지)
+  durationMs?: number;
+  startedAt?: string;  // ISO string
+  finishedAt?: string; // ISO string
 }
 
 export interface FinishSessionResponse {
     sessionId: string;
     savedMessages: number;
 }
+
+// 서버가 보내주는 history item(원본)
+export interface ConversationHistoryItemFromServer {
+    sessionId: number;
+    startTime: string;
+    finishedAt: string | null;
+    script: ChatMessage[];
+  }
+  
+  // /api/conversation/history 응답 구조
+  export interface ConversationHistoryResponse {
+    userId: number;
+    history: ConversationHistoryItemFromServer[];
+  }
 
 export interface ConversationHistoryItem {
     sessionId: string;
@@ -128,7 +147,7 @@ export interface ConversationSettings {
 // === 6. Stats ===
 export interface UserStats {
     totalSessions: number;
-    totalMinutes: number;
+    totalTimeMins: number;
     avgScore: number;
     bestScore: number;
     streak: number;

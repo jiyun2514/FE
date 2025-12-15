@@ -1,0 +1,91 @@
+// src/api/ai.ts
+import client, { BASE_URL } from './Client';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import RNFS from 'react-native-fs';
+import { Buffer } from 'buffer';
+
+const ACCESS_TOKEN_KEY = 'accessToken';
+
+export const aiApi = {
+  /**
+   * ✅ STT — EB 백엔드 기준 (PCM 멀티파트 업로드)
+   */
+  stt: async (wavFilePath: string, sampleRate = 16000) => {
+    const token = await AsyncStorage.getItem(ACCESS_TOKEN_KEY);
+
+    // 1️⃣ wav 파일을 base64로 읽기
+    const wavBase64 = await RNFS.readFile(wavFilePath, 'base64');
+    const wavBuffer = Buffer.from(wavBase64, 'base64');
+
+    // 2️⃣ WAV 헤더 파싱 → PCM data chunk 추출
+    const readUInt32LE = (buf: Buffer, off: number) =>
+      (buf[off] |
+        (buf[off + 1] << 8) |
+        (buf[off + 2] << 16) |
+        (buf[off + 3] << 24)) >>> 0;
+
+    let dataStart = -1;
+    let dataSize = 0;
+
+    if (
+      wavBuffer.slice(0, 4).toString('ascii') === 'RIFF' &&
+      wavBuffer.slice(8, 12).toString('ascii') === 'WAVE'
+    ) {
+      let offset = 12;
+      while (offset + 8 <= wavBuffer.length) {
+        const chunkId = wavBuffer.slice(offset, offset + 4).toString('ascii');
+        const chunkSize = readUInt32LE(wavBuffer, offset + 4);
+        if (chunkId === 'data') {
+          dataStart = offset + 8;
+          dataSize = chunkSize;
+          break;
+        }
+        offset += 8 + chunkSize + (chunkSize % 2);
+      }
+    }
+
+    if (dataStart < 0) {
+      throw new Error('WAV PCM data chunk not found');
+    }
+
+    const pcmBuffer = wavBuffer.slice(dataStart, dataStart + dataSize);
+    const pcmBase64 = Buffer.from(pcmBuffer).toString('base64');
+
+    // 3️⃣ 임시 PCM 파일로 저장 (멀티파트 업로드용)
+    const pcmFilePath = `${RNFS.CachesDirectoryPath}/stt_${Date.now()}.pcm`;
+    await RNFS.writeFile(pcmFilePath, pcmBase64, 'base64');
+
+    // 4️⃣ 멀티파트 FormData 구성
+    const pcmFile = {
+      uri: `file://${pcmFilePath}`,
+      name: `stt_${Date.now()}.pcm`,
+      type: 'application/octet-stream',
+    } as any;
+
+    const form = new FormData();
+    form.append('audio', pcmFile);
+    form.append('sampleRate', String(sampleRate));
+
+    const STT_URL = `${BASE_URL}/api/ai/stt`;
+
+    // 5️⃣ fetch로 업로드 (Content-Type 수동 지정 금지)
+    const res = await fetch(STT_URL, {
+      method: 'POST',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        Accept: 'application/json',
+      },
+      body: form as any,
+    });
+
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(`STT ${res.status}: ${text}`);
+    }
+    try {
+      return JSON.parse(text).data ?? JSON.parse(text);
+    } catch {
+      return { raw: text };
+    }
+  },
+};

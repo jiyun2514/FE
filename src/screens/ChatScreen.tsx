@@ -688,9 +688,31 @@ export default function ChatScreen() {
     }
   };
 
-  // 답변 추천 (미구현)
-  const handleRequestSuggestion = async () => {
-    Alert.alert('Info', '답변 추천 기능은 준비 중입니다.');
+  // 답변 추천
+  const handleRequestSuggestion = async (messageId: string, content: string) => {
+    setMessages(prev =>
+      prev.map(msg => (msg.id === messageId ? { ...msg, isLoadingExtra: true } : msg)),
+    );
+
+    try {
+      const res = await aiApi.exampleReply(content, sessionId);
+      const data: any = res.data?.data ?? res.data;
+      const suggestionText =
+        data?.reply_example ?? data?.text ?? data?.reply ?? data?.message ?? data?.example ?? '';
+
+      if (!suggestionText) throw new Error('Empty suggestion');
+
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === messageId ? { ...msg, suggestion: suggestionText, isLoadingExtra: false } : msg,
+        ),
+      );
+    } catch (err) {
+      Alert.alert('Error', '답변 추천을 불러오지 못했습니다.');
+      setMessages(prev =>
+        prev.map(msg => (msg.id === messageId ? { ...msg, isLoadingExtra: false } : msg)),
+      );
+    }
   };
 
   const handleCloseExtra = (messageId: string, type: 'feedback' | 'suggestion') => {
@@ -760,7 +782,9 @@ export default function ChatScreen() {
           {!isUser && (
             <TouchableOpacity
               onPress={() =>
-                item.suggestion ? handleCloseExtra(item.id, 'suggestion') : handleRequestSuggestion()
+                item.suggestion
+                  ? handleCloseExtra(item.id, 'suggestion')
+                  : handleRequestSuggestion(item.id, item.content)
               }
               style={styles.actionIconBtn}
               disabled={item.isLoadingExtra}

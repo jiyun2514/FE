@@ -106,6 +106,12 @@ export const aiApi = {
 
   chat: (text: string) => client.post('/api/ai/chat', { text }),
   feedback: (text: string) => client.post('/api/ai/feedback', { text }),
+  // ai_text + optional sessionId 로 예시 답변 생성
+  exampleReply: (aiText: string, sessionId?: string | null) =>
+    client.post('/api/ai/example-reply', {
+      ai_text: aiText,
+      sessionId: sessionId ?? undefined,
+    }),
   tts: (text: string, accent: string = 'us', gender: string = 'female') =>
     client.post('/api/ai/tts', { text, accent, gender }),
 };
